@@ -82,9 +82,6 @@ class WolfStrike:
         """
         try:
             self.logger.info("Performing cleanup operations...")
-            # Save scan state if needed
-            # Close database connections
-            # Release thread pools
             self.logger.info("Cleanup completed")
         except Exception as e:
             self.logger.error(f"Error during cleanup: {str(e)}")
@@ -121,17 +118,14 @@ class WolfStrike:
         if not target:
             return False
         
-        # Check if target is IP address
         ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
         if re.match(ip_pattern, target):
             return True
         
-        # Check if target is valid URL
         try:
             result = urlparse(target)
             return all([result.scheme, result.netloc])
         except Exception:
-            # Try adding https:// prefix
             try:
                 result = urlparse(f"https://{target}")
                 return all([result.scheme, result.netloc])
@@ -165,14 +159,11 @@ class WolfStrike:
         """
         config = self.config_manager.load_default_config()
         
-        # Override with environment variables if present
         config = self.config_manager.override_from_env(config)
         
-        # Override with command-line arguments if provided
         if self.args:
             config = self.config_manager.override_from_args(config, self.args)
         
-        # Validate configuration
         if not self.config_manager.validate_config(config):
             raise ConfigurationError("Invalid configuration detected")
         
@@ -195,6 +186,24 @@ class WolfStrike:
         elif platform_info['platform'] == 'windows':
             self.logger.warning("Running on Windows - Some features may be limited")
     
+    def _get_module_name(self) -> str:
+        """
+        Determine which module(s) to run based on command-line arguments.
+        
+        Returns:
+            Module name string
+        """
+        if hasattr(self.args, 'full_power') and self.args.full_power:
+            return 'all'
+        
+        if hasattr(self.args, 'quick') and self.args.quick:
+            return 'all'
+        
+        if hasattr(self.args, 'module') and self.args.module:
+            return self.args.module
+        
+        return 'all'
+    
     def dispatch_module(self, module_name: str, config: Dict[str, Any]) -> None:
         """
         Dispatch to appropriate scanning module.
@@ -203,24 +212,10 @@ class WolfStrike:
             module_name: Name of the module to run
             config: Configuration dictionary
         """
-        module_map = {
-            'recon': 'modules.recon',
-            'scan': 'modules.scanner',
-            'vulnscan': 'modules.vuln_scanner',
-            'attack': 'modules.attacks',
-            'auth': 'modules.auth_tester',
-            'crawl': 'modules.crawler',
-            'api': 'modules.api_tester',
-            'network': 'modules.network',
-            'osint': 'modules.osint',
-        }
-        
         if module_name == 'all':
             self._run_all_modules(config)
-        elif module_name in module_map:
-            self._run_single_module(module_map[module_name], config)
         else:
-            raise WolfStrikeException(f"Unknown module: {module_name}")
+            self._run_single_module(module_name, config)
     
     def _run_all_modules(self, config: Dict[str, Any]) -> None:
         """
@@ -239,15 +234,32 @@ class WolfStrike:
         )
         engine.run_full_scan()
     
-    def _run_single_module(self, module_path: str, config: Dict[str, Any]) -> None:
+    def _run_single_module(self, module_name: str, config: Dict[str, Any]) -> None:
         """
         Execute a single scanning module.
         
         Args:
-            module_path: Import path of the module
+            module_name: Name of the module
             config: Configuration dictionary
         """
         import importlib
+        
+        module_map = {
+            'recon': 'modules.recon',
+            'scanner': 'modules.scanner',
+            'vuln_scanner': 'modules.vuln_scanner',
+            'attacks': 'modules.attacks',
+            'auth_tester': 'modules.auth_tester',
+            'crawler': 'modules.crawler',
+            'api_tester': 'modules.api_tester',
+            'network': 'modules.network',
+            'osint': 'modules.osint',
+        }
+        
+        if module_name not in module_map:
+            raise WolfStrikeException(f"Unknown module: {module_name}")
+        
+        module_path = module_map[module_name]
         
         try:
             module = importlib.import_module(module_path)
@@ -265,21 +277,16 @@ class WolfStrike:
         Parses arguments, validates input, and dispatches to modules.
         """
         try:
-            # Display banner
             print(self.banner.get_main_banner())
             
-            # Parse command-line arguments
             self.parse_arguments()
             
-            # Check if help is requested
             if self.args.help:
                 HelpSystem.show_help()
                 return
             
-            # Check platform compatibility
             self.check_platform_compatibility()
             
-            # Validate target
             if not self.args.target:
                 self.logger.error("No target specified")
                 print("Error: No target specified. Use --target <url> or -t <url>")
@@ -292,20 +299,16 @@ class WolfStrike:
                 print("Please provide a valid URL or IP address")
                 sys.exit(1)
             
-            # Normalize target
             self.target = self.normalize_target(self.args.target)
             self.logger.info(f"Target set to: {self.target}")
             
-            # Load configuration
             config = self.load_configuration()
             self.logger.info("Configuration loaded successfully")
             
-            # Set logging level
             if self.args.verbose:
                 self.logger.set_debug_mode(True)
             
-            # Dispatch to appropriate module
-            module_name = self.args.module if hasattr(self.args, 'module') else 'all'
+            module_name = self._get_module_name()
             self.dispatch_module(module_name, config)
             
         except ConfigurationError as e:
