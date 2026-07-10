@@ -1,0 +1,222 @@
+{
+  "description": "WOLFSTRIKE CMS Fingerprint Database",
+  "author": "ATHEX BLACK HAT",
+  "team": "Wolf Intelligence PK",
+  "version": "1.0.0",
+  "total_cms": 25,
+  "cms_list": {
+    "WordPress": {
+      "detection_priority": 1,
+      "paths": ["/wp-admin/", "/wp-content/", "/wp-includes/", "/wp-login.php", "/wp-json/", "/xmlrpc.php"],
+      "files": ["/readme.html", "/license.txt", "/wp-config-sample.php"],
+      "meta_generator": "WordPress",
+      "headers": {"X-Powered-By": ""},
+      "cookies": ["wordpress_logged_in_", "wp-settings-", "wordpress_test_cookie"],
+      "version_paths": ["/wp-includes/version.php", "/readme.html"],
+      "version_regex": "Version ([\\d.]+)",
+      "plugins_path": "/wp-content/plugins/",
+      "themes_path": "/wp-content/themes/"
+    },
+    "Drupal": {
+      "detection_priority": 1,
+      "paths": ["/user/login", "/admin/", "/node/", "/sites/default/", "/sites/all/"],
+      "files": ["/CHANGELOG.txt", "/COPYRIGHT.txt", "/MAINTAINERS.txt", "/INSTALL.txt"],
+      "meta_generator": "Drupal",
+      "headers": {"X-Drupal-Cache": "", "X-Drupal-Dynamic-Cache": "", "X-Generator": "Drupal"},
+      "cookies": ["SESS", "SSESS", "Drupal.tableDrag.showWeight"],
+      "version_paths": ["/CHANGELOG.txt"],
+      "version_regex": "Drupal ([\\d.]+)",
+      "modules_path": "/sites/all/modules/",
+      "themes_path": "/sites/all/themes/"
+    },
+    "Joomla": {
+      "detection_priority": 1,
+      "paths": ["/administrator/", "/components/", "/modules/", "/templates/", "/plugins/"],
+      "files": ["/README.txt", "/LICENSE.txt", "/htaccess.txt", "/web.config.txt"],
+      "meta_generator": "Joomla",
+      "headers": {},
+      "cookies": ["joomla_user_state", "joomla_remember_me"],
+      "version_paths": ["/administrator/manifests/files/joomla.xml", "/language/en-GB/en-GB.xml"],
+      "version_regex": "Joomla! ([\\d.]+)",
+      "components_path": "/components/",
+      "templates_path": "/templates/"
+    },
+    "Magento": {
+      "detection_priority": 2,
+      "paths": ["/admin/", "/index.php/admin/", "/catalog/", "/checkout/"],
+      "files": ["/LICENSE.txt", "/LICENSE_AFL.txt", "/RELEASE_NOTES.txt"],
+      "meta_generator": "Magento",
+      "headers": {"X-Magento-Cache-Debug": "", "X-Magento-Tags": ""},
+      "cookies": ["frontend", "adminhtml", "mage-cache-sessid", "mage-cache-storage"],
+      "version_paths": ["/composer.json"],
+      "version_regex": "\"version\": \"([\\d.]+)\"",
+      "admin_path": "/admin",
+      "skin_path": "/skin/frontend/"
+    },
+    "Shopify": {
+      "detection_priority": 2,
+      "paths": ["/cart", "/checkout", "/collections/", "/products/"],
+      "files": [],
+      "meta_generator": "Shopify",
+      "headers": {"X-Shopify-Stage": "", "X-ShopId": "", "X-Shopify-Storefront": ""},
+      "cookies": ["_shopify_s", "_shopify_y", "cart_sig", "secure_customer_sig"],
+      "version_paths": [],
+      "version_regex": "",
+      "cdn_patterns": ["cdn.shopify.com", "shopifycloud.com"]
+    },
+    "WooCommerce": {
+      "detection_priority": 3,
+      "paths": ["/shop/", "/cart/", "/checkout/", "/my-account/", "/product/"],
+      "files": [],
+      "meta_generator": "",
+      "headers": {},
+      "cookies": ["woocommerce_cart_hash", "woocommerce_items_in_cart", "wp_woocommerce_session_"],
+      "version_paths": ["/wp-content/plugins/woocommerce/readme.txt"],
+      "version_regex": "Stable tag: ([\\d.]+)",
+      "depends_on": "WordPress"
+    },
+    "PrestaShop": {
+      "detection_priority": 2,
+      "paths": ["/admin/", "/modules/", "/themes/", "/override/", "/cache/"],
+      "files": ["/README.md", "/CONTRIBUTING.md", "/INSTALL.txt"],
+      "meta_generator": "PrestaShop",
+      "headers": {"Powered-By": "PrestaShop"},
+      "cookies": ["PrestaShop-"],
+      "version_paths": ["/config/settings.inc.php", "/install/version.php"],
+      "version_regex": "([\\d.]+)"
+    },
+    "Ghost": {
+      "detection_priority": 3,
+      "paths": ["/ghost/", "/ghost/api/", "/content/images/", "/content/themes/"],
+      "files": [],
+      "meta_generator": "Ghost",
+      "headers": {"X-Ghost-Cache-Status": "", "X-Powered-By": "Ghost"},
+      "cookies": ["ghost-admin-api-session", "ghost-messages"],
+      "version_paths": ["/ghost/api/v3/admin/site/"],
+      "version_regex": "\"version\": \"([\\d.]+)\""
+    },
+    "Wix": {
+      "detection_priority": 3,
+      "paths": [],
+      "files": [],
+      "meta_generator": "Wix.com",
+      "headers": {"X-Wix-Request-Id": "", "X-Wix-Renderer-Server": ""},
+      "cookies": ["XSRF-TOKEN", "hs", "svSession"],
+      "version_paths": [],
+      "version_regex": "",
+      "cdn_patterns": ["wixstatic.com", "parastorage.com", "wix-code.com"]
+    },
+    "Squarespace": {
+      "detection_priority": 3,
+      "paths": ["/config/", "/api/", "/search/"],
+      "files": [],
+      "meta_generator": "Squarespace",
+      "headers": {"X-Squarespace-Cache": "", "x-squarespace-server": ""},
+      "cookies": ["SS_MATTR", "SS_MID", "Crumb", "squarespace-popup-overlay"],
+      "version_paths": [],
+      "version_regex": "",
+      "cdn_patterns": ["squarespace.com", "sqspcdn.com", "static1.squarespace.com"]
+    },
+    "Blogger": {
+      "detection_priority": 3,
+      "paths": ["/feeds/", "/search/", "/p/"],
+      "files": [],
+      "meta_generator": "blogger",
+      "headers": {},
+      "cookies": [],
+      "version_paths": [],
+      "version_regex": "",
+      "cdn_patterns": ["blogger.googleusercontent.com", "blogblog.com"]
+    },
+    "TYPO3": {
+      "detection_priority": 3,
+      "paths": ["/typo3/", "/typo3conf/", "/typo3temp/", "/fileadmin/", "/uploads/"],
+      "files": ["/INSTALL.md", "/CHANGELOG.md", "/CONTRIBUTING.md"],
+      "meta_generator": "TYPO3",
+      "headers": {},
+      "cookies": ["fe_typo_user", "be_typo_user"],
+      "version_paths": ["/typo3/sysext/core/Classes/Core/SystemEnvironmentBuilder.php"],
+      "version_regex": "([\\d.]+)"
+    },
+    "Concrete5": {
+      "detection_priority": 4,
+      "paths": ["/concrete/", "/index.php/login/", "/index.php/dashboard/"],
+      "files": ["/concrete/config/install/base/"],
+      "meta_generator": "Concrete5",
+      "headers": {},
+      "cookies": ["CONCRETE5", "CONCRETE5_LOGIN"],
+      "version_paths": ["/concrete/config/version.php"],
+      "version_regex": "([\\d.]+)"
+    },
+    "vBulletin": {
+      "detection_priority": 3,
+      "paths": ["/forum/", "/admincp/", "/modcp/", "/member.php", "/showthread.php"],
+      "files": [],
+      "meta_generator": "vBulletin",
+      "headers": {},
+      "cookies": ["bblastactivity", "bblastvisit", "bbsessionhash", "vb_userid"],
+      "version_paths": ["/includes/version_vbulletin.php", "/forum/includes/version_vbulletin.php"],
+      "version_regex": "([\\d.]+)"
+    },
+    "phpBB": {
+      "detection_priority": 4,
+      "paths": ["/forum/", "/adm/", "/includes/", "/language/", "/styles/"],
+      "files": ["/docs/README.html", "/install/"],
+      "meta_generator": "phpBB",
+      "headers": {},
+      "cookies": ["phpbb3_", "phpbb2mysql_"],
+      "version_paths": ["/docs/CHANGELOG.html", "/adm/index.php"],
+      "version_regex": "([\\d.]+)"
+    },
+    "MediaWiki": {
+      "detection_priority": 4,
+      "paths": ["/wiki/", "/w/", "/index.php/", "/api.php", "/load.php"],
+      "files": [],
+      "meta_generator": "MediaWiki",
+      "headers": {},
+      "cookies": ["wikidb_", "mw_", "wikimedia_session"],
+      "version_paths": ["/wiki/Special:Version", "/index.php/Special:Version"],
+      "version_regex": "([\\d.]+)"
+    },
+    "Umbraco": {
+      "detection_priority": 4,
+      "paths": ["/umbraco/", "/umbraco/login.aspx", "/umbraco/surface/"],
+      "files": [],
+      "meta_generator": "umbraco",
+      "headers": {"X-Umbraco-Version": ""},
+      "cookies": ["UMB_UCONTEXT", "UMB_UPDCHK", "UMB-XSRF-TOKEN", "UMB-XSRF-V"],
+      "version_paths": ["/umbraco/"],
+      "version_regex": "([\\d.]+)"
+    },
+    "Sitecore": {
+      "detection_priority": 4,
+      "paths": ["/sitecore/", "/sitecore/login/", "/sitecore/shell/", "/layouts/"],
+      "files": [],
+      "meta_generator": "Sitecore",
+      "headers": {},
+      "cookies": ["SC_ANALYTICS_GLOBAL_COOKIE", "sitecore_userticket", "ASP.NET_SessionId"],
+      "version_paths": ["/sitecore/shell/sitecore.version.xml"],
+      "version_regex": "([\\d.]+)"
+    },
+    "Kentico": {
+      "detection_priority": 5,
+      "paths": ["/Kentico/", "/CMSPages/", "/CMSModules/", "/CMSScripts/"],
+      "files": [],
+      "meta_generator": "Kentico",
+      "headers": {},
+      "cookies": ["CMSPreferredCulture", "CMSCurrentTheme", "CMSViewMode", "VisitorStatus"],
+      "version_paths": ["/Kentico/"],
+      "version_regex": "([\\d.]+)"
+    },
+    "DotNetNuke": {
+      "detection_priority": 5,
+      "paths": ["/admin/", "/host/", "/desktopmodules/", "/portals/"],
+      "files": ["/Install/InstallWizard.aspx", "/Install/UnderConstruction.htm"],
+      "meta_generator": "DotNetNuke",
+      "headers": {"X-DNN-Version": "", "DNNOutputCache": ""},
+      "cookies": ["dnn_IsMobile", "language", ".DOTNETNUKE", "authentication"],
+      "version_paths": ["/Documentation/License.txt", "/admin/"],
+      "version_regex": "([\\d.]+)"
+    }
+  }
+}

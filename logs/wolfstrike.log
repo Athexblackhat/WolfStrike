@@ -1,0 +1,57 @@
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mWOLFSTRIKE initialized successfully[0m
+2026-07-10 12:58:23 [WARNING] [WolfStrike] [93mRunning on Windows - Some features may be limited[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mTarget set to: https://sit.free.nf[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mConfiguration loaded successfully[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mScanEngine initialized for target: https://sit.free.nf[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mStarting full power scan[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mExecuting module: recon[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mExecuting module: scanner[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mExecuting module: vuln_scanner[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mExecuting module: attacks[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mExecuting module: auth_tester[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mExecuting module: crawler[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mExecuting module: api_tester[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mExecuting module: osint[0m
+2026-07-10 12:58:23 [ERROR] [WolfStrike] [91mUnexpected error in recon: deadlock detected by _ModuleLock('modules.scanner') at 1902445737424[0m
+2026-07-10 12:58:23 [ERROR] [WolfStrike] [91mUnexpected error in scanner: deadlock detected by _ModuleLock('modules.vuln_scanner') at 1902445737936[0m
+2026-07-10 12:58:23 [ERROR] [WolfStrike] [91mUnexpected error in auth_tester: deadlock detected by _ModuleLock('modules.vuln_scanner') at 1902445737936[0m
+2026-07-10 12:58:23 [ERROR] [WolfStrike] [91mUnexpected error in api_tester: deadlock detected by _ModuleLock('modules.vuln_scanner') at 1902445737936[0m
+2026-07-10 12:58:23 [ERROR] [WolfStrike] [91mUnexpected error in vuln_scanner: deadlock detected by _ModuleLock('modules.attacks') at 1902445737808[0m
+2026-07-10 12:58:23 [ERROR] [WolfStrike] [91mUnexpected error in osint: deadlock detected by _ModuleLock('modules.attacks') at 1902445737808[0m
+2026-07-10 12:58:23 [ERROR] [WolfStrike] [91mUnexpected error in crawler: deadlock detected by _ModuleLock('modules.attacks') at 1902445737808[0m
+2026-07-10 12:58:23 [ERROR] [WolfStrike] [91mModule error in attacks: [WOLFSTRIKE] Module Error: Module attacks has no run() function[0m
+2026-07-10 12:58:23 [INFO] [WolfStrike] [94mScan completed: 0 vulnerabilities, 8 errors, 0.54s[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mWOLFSTRIKE initialized successfully[0m
+2026-07-10 12:59:59 [WARNING] [WolfStrike] [93mRunning on Windows - Some features may be limited[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mTarget set to: https://sit.free.nf[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mConfiguration loaded successfully[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mScanEngine initialized for target: https://sit.free.nf[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mStarting full power scan[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mExecuting module: recon[0m
+2026-07-10 12:59:59 [ERROR] [WolfStrike] [91mModule error in recon: [WOLFSTRIKE] Module Error: Module recon has no run() function[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mExecuting module: scanner[0m
+2026-07-10 12:59:59 [ERROR] [WolfStrike] [91mModule error in scanner: [WOLFSTRIKE] Module Error: Module scanner has no run() function[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mExecuting module: vuln_scanner[0m
+2026-07-10 12:59:59 [ERROR] [WolfStrike] [91mModule error in vuln_scanner: [WOLFSTRIKE] Module Error: Module vuln_scanner has no run() function[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mExecuting module: attacks[0m
+2026-07-10 12:59:59 [ERROR] [WolfStrike] [91mModule error in attacks: [WOLFSTRIKE] Module Error: Module attacks has no run() function[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mExecuting module: auth_tester[0m
+2026-07-10 12:59:59 [ERROR] [WolfStrike] [91mModule error in auth_tester: [WOLFSTRIKE] Module Error: Module auth_tester has no run() function[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mExecuting module: crawler[0m
+2026-07-10 12:59:59 [ERROR] [WolfStrike] [91mModule error in crawler: [WOLFSTRIKE] Module Error: Module crawler has no run() function[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mExecuting module: api_tester[0m
+2026-07-10 12:59:59 [ERROR] [WolfStrike] [91mModule error in api_tester: [WOLFSTRIKE] Module Error: Module api_tester has no run() function[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mExecuting module: osint[0m
+2026-07-10 12:59:59 [ERROR] [WolfStrike] [91mModule error in osint: [WOLFSTRIKE] Module Error: Module osint has no run() function[0m
+2026-07-10 12:59:59 [INFO] [WolfStrike] [94mScan completed: 0 vulnerabilities, 8 errors, 0.28s[0m
+2026-07-10 17:49:10 [INFO] [WolfStrike] [94mWOLFSTRIKE initialized successfully[0m
+2026-07-10 17:49:10 [WARNING] [WolfStrike] [93mRunning on Windows - Some features may be limited[0m
+2026-07-10 17:49:10 [INFO] [WolfStrike] [94mTarget set to: https://sit.free.nf[0m
+2026-07-10 17:49:10 [INFO] [WolfStrike] [94mConfiguration loaded successfully[0m
+2026-07-10 17:49:10 [INFO] [WolfStrike] [94mScanEngine initialized for target: https://sit.free.nf[0m
+2026-07-10 17:49:10 [INFO] [WolfStrike] [94mStarting full power scan[0m
+2026-07-10 17:49:10 [INFO] [WolfStrike] [94mExecuting module: recon[0m
+2026-07-10 17:50:41 [INFO] [WolfStrike] [94mExecuting module: scanner[0m
+2026-07-10 17:53:12 [WARNING] [WolfStrike] [93mReceived signal 2. Shutting down gracefully...[0m
+2026-07-10 17:53:12 [INFO] [WolfStrike] [94mPerforming cleanup operations...[0m
+2026-07-10 17:53:12 [INFO] [WolfStrike] [94mCleanup completed[0m
