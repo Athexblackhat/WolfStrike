@@ -1,0 +1,260 @@
+# config/settings.yaml
+
+# ============================================================
+# WOLFSTRIKE Main Configuration
+# Author: ATHEX BLACK HAT
+# Team: Wolf Intelligence PK
+# Version: 1.0.0
+# ============================================================
+
+# General Settings
+general:
+  tool_name: "WOLFSTRIKE"
+  version: "1.0.0"
+  codename: "Shadowfang"
+  author: "ATHEX BLACK HAT"
+  team: "Wolf Intelligence PK"
+  debug_mode: false
+  verbose: true
+  quiet: false
+  no_color: false
+  log_level: "INFO"
+  log_file: "logs/wolfstrike.log"
+
+# Target Settings
+target:
+  max_targets: 100
+  follow_redirects: true
+  max_redirects: 5
+  verify_ssl: false
+  allow_insecure: true
+
+# Performance Settings
+performance:
+  threads: 50
+  timeout: 30
+  delay: 0
+  retries: 3
+  max_depth: 3
+  max_requests_per_second: 0
+  connection_pool_size: 100
+  dns_cache_enabled: true
+  dns_cache_ttl: 300
+
+# HTTP Settings
+http:
+  user_agent: "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0"
+  accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+  accept_language: "en-US,en;q=0.5"
+  accept_encoding: "gzip, deflate"
+  cache_control: "no-cache"
+  connection: "keep-alive"
+  custom_headers: {}
+  cookies: {}
+
+# Stealth Settings
+stealth:
+  enabled: false
+  random_user_agent: false
+  tor_enabled: false
+  tor_host: "127.0.0.1"
+  tor_port: 9050
+  tor_control_port: 9051
+  proxy_enabled: false
+  proxy_url: ""
+  proxy_file: ""
+  proxy_rotation: false
+  request_randomization: false
+  timing_jitter: 0
+
+# WAF Bypass Settings
+waf_bypass:
+  enabled: false
+  techniques:
+    - "url_encoding"
+    - "double_url_encoding"
+    - "unicode_encoding"
+    - "html_entity_encoding"
+    - "mixed_case"
+    - "comment_obfuscation"
+    - "tab_replacement"
+    - "newline_injection"
+    - "parameter_pollution"
+    - "http_parameter_fragmentation"
+
+# AI Engine Settings
+ai_engine:
+  enabled: true
+  pattern_recognition: true
+  smart_payload_generation: true
+  false_positive_filter: true
+  behavior_analysis: true
+  anomaly_detection: true
+  risk_scoring: true
+  min_confidence_threshold: 0.7
+  strict_mode: false
+  learning_enabled: true
+  baseline_samples_required: 20
+  anomaly_threshold: 2.5
+
+# Module Settings
+modules:
+  recon:
+    enabled: true
+    subdomain_enum: true
+    subdomain_wordlist: "wordlists/subdomains_top100k.txt"
+    whois_lookup: true
+    dns_enumeration: true
+    reverse_ip: false
+    email_harvesting: false
+    social_discovery: false
+    cloud_storage_discovery: false
+    technology_detection: true
+    waf_detection: true
+    cdn_detection: true
+    ssl_analysis: true
+    robots_sitemap_analysis: true
+
+  scanner:
+    enabled: true
+    port_scan: true
+    port_range: "1-1000"
+    service_detection: true
+    os_fingerprinting: false
+    http_methods_test: true
+    header_analysis: true
+    cookie_analysis: true
+    js_analysis: true
+    hidden_form_discovery: true
+    api_discovery: true
+    backup_file_discovery: true
+
+  vuln_scanner:
+    enabled: true
+    xss_scanner: true
+    sqli_scanner: true
+    nosqli_scanner: true
+    command_injection: true
+    ldap_injection: true
+    xpath_injection: true
+    ssti_scanner: true
+    ssrf_scanner: true
+    lfi_rfi_scanner: true
+    csrf_detection: true
+    open_redirect: true
+    file_upload_test: true
+    clickjacking_detection: true
+    cors_misconfig: true
+    security_misconfig: true
+
+  attacks:
+    enabled: false
+    sqli_exploitation: false
+    xss_exploitation: false
+    jwt_attacks: false
+    deserialization_attacks: false
+    race_condition: false
+    host_header_injection: false
+    crlf_injection: false
+    cache_poisoning: false
+    prototype_pollution: false
+
+  auth_tester:
+    enabled: false
+    brute_force: false
+    password_policy_test: false
+    session_testing: false
+    jwt_analysis: false
+    oauth_testing: false
+    mfa_testing: false
+
+  crawler:
+    enabled: true
+    spider: true
+    ajax_crawling: false
+    sitemap_generation: true
+    link_checking: true
+    wayback_machine: false
+
+  api_tester:
+    enabled: true
+    rest_testing: true
+    graphql_testing: true
+    soap_testing: false
+    rate_limit_testing: true
+    mass_assignment: false
+    bola_testing: false
+    bfla_testing: false
+
+  osint:
+    enabled: false
+    shodan_integration: false
+    censys_integration: false
+    securitytrails_integration: false
+    certificate_transparency: true
+    github_dorking: false
+    pastebin_monitoring: false
+    breach_check: false
+
+# Reporting Settings
+reporting:
+  auto_generate: true
+  output_directory: "./reports"
+  formats:
+    - "json"
+  include_evidence: true
+  include_remediation: true
+  executive_summary: true
+  mitre_mapping: true
+  risk_scoring: true
+  screenshot_capture: false
+
+# API Keys (Override via environment variables)
+api_keys:
+  shodan: ""
+  censys_id: ""
+  censys_secret: ""
+  securitytrails: ""
+  github_token: ""
+
+# Notification Settings
+notifications:
+  enabled: false
+  slack_webhook: ""
+  discord_webhook: ""
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+
+# Integration Settings
+integrations:
+  burp_export: false
+  zap_integration: false
+  jira_integration: false
+  ci_cd_mode: false
+
+# Database Settings
+database:
+  enabled: true
+  type: "sqlite"
+  path: "database/wolfstrike.db"
+  max_history: 1000
+
+# Cache Settings
+cache:
+  enabled: true
+  type: "memory"
+  max_size_mb: 256
+  ttl_seconds: 3600
+
+# Platform Specific
+platform:
+  termux_lite_mode: true
+  windows_compatibility: true
+  docker_detection: true
+
+# Update Settings
+updates:
+  check_on_startup: true
+  auto_update: false
+  update_channel: "stable"
+  last_check: ""

