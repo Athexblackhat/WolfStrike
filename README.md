@@ -273,28 +273,37 @@ OUTPUT_DIR=./reports
 ## QUICK START
 
 ### Basic scan
+```
 wolfstrike --target example.com
-
+```
 ### Full power scan with all modules
+```
 wolfstrike --target example.com --full-power
-
+```
 ### Interactive menu mode
+```
 wolfstrike --interactive
-
+```
 ### Specific module scan
+```
 wolfstrike --target example.com --module sqli,xss,lfi
-
+```
 ### Stealth scan through TOR
+```
 wolfstrike --target example.com --stealth --tor
-
+```
 ### Generate PDF report
+```
 wolfstrike --target example.com --report pdf --output ./audit/
-
+```
 ### Verbose debug mode
+```
 wolfstrike --target example.com --verbose --debug
-
+```
 ### Scan with custom threads and timeout
+```
 wolfstrike --target example.com --threads 100 --timeout 15
+```
 
 ## COMMAND-LINE OPTIONS
 Option               | Description
