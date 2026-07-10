@@ -1,0 +1,16 @@
+aiohttp>=3.9.0
+beautifulsoup4>=4.12.0
+certifi>=2024.0.0
+charset-normalizer>=3.3.0
+colorama>=0.4.6
+dnspython>=2.6.0
+idna>=3.6
+lxml>=5.1.0
+Pygments>=2.17.0
+PyYAML>=6.0.0
+requests>=2.31.0
+rich>=13.7.0
+soupsieve>=2.5.0
+tabulate>=0.9.0
+tqdm>=4.66.0
+urllib3>=2.1.0
