@@ -7,14 +7,14 @@ Team: Wolf Intelligence PK
 Version: 1.0.0
 
 Core engine and foundational components for the WOLFSTRIKE toolkit.
-Provides configuration management, logging, database operations,
+Provides configuration management, logging, database operations (via SQLAlchemy),
 platform detection, and the main scanning engine.
 """
 
 from core.engine import ScanEngine
 from core.config import ConfigManager
 from core.logger import Logger
-from core.database import DatabaseManager
+# DatabaseManager removed - using SQLAlchemy from database/ package
 from core.cache import CacheManager
 from core.exceptions import (
     WolfStrikeException,
@@ -24,7 +24,7 @@ from core.exceptions import (
     NetworkError,
     AuthenticationError,
     PayloadError,
-    DatabaseError,
+    # DatabaseError removed - using from database package
     CacheError,
 )
 from core.platform_checker import PlatformChecker
@@ -35,7 +35,7 @@ __all__ = [
     'ScanEngine',
     'ConfigManager',
     'Logger',
-    'DatabaseManager',
+    # 'DatabaseManager' removed - use database package
     'CacheManager',
     'WolfStrikeException',
     'ConfigurationError',
@@ -44,7 +44,7 @@ __all__ = [
     'NetworkError',
     'AuthenticationError',
     'PayloadError',
-    'DatabaseError',
+    # 'DatabaseError' removed - use database package
     'CacheError',
     'PlatformChecker',
     'Banner',
