@@ -14,7 +14,7 @@ import re
 from typing import Dict, List, Any, Optional, Set, Tuple
 
 import requests
-from requests.exceptions import RequestException
+from requests.exceptions import RequestException, Timeout, ConnectionError
 
 
 class TechDetector:
@@ -105,6 +105,65 @@ class TechDetector:
         self.detected_tech: Dict[str, Set[str]] = {}
         self.errors: List[str] = []
     
+    def _safe_get_headers(self, response: Optional[requests.Response]) -> Dict[str, str]:
+        """Safely get headers from response with fallback."""
+        if response and hasattr(response, 'headers'):
+            return dict(response.headers)
+        return {}
+    
+    def _safe_get_cookies(self, response: Optional[requests.Response]) -> Dict[str, str]:
+        """Safely get cookies from response with fallback."""
+        cookies = {}
+        if response and hasattr(response, 'cookies'):
+            for cookie in response.cookies:
+                cookies[cookie.name] = cookie.value
+        return cookies
+    
+    def _is_html_content(self, response: Optional[requests.Response]) -> bool:
+        """Check if response contains HTML content."""
+        if not response:
+            return False
+        
+        content_type = response.headers.get('Content-Type', '').lower()
+        if 'text/html' in content_type:
+            return True
+        
+        if response.text and ('<html' in response.text.lower() or '<!doctype html' in response.text.lower()):
+            return True
+        
+        return False
+    
+    def _validate_html(self, html: Optional[str]) -> bool:
+        """Validate that HTML content is usable."""
+        if not html:
+            return False
+        if len(html.strip()) < 10:
+            return False
+        return True
+    
+    def _check_page_fetch(self, result: Tuple) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Check page fetch result and return status.
+        
+        Returns:
+            Tuple of (success, data_dict)
+        """
+        headers, html, cookies = result
+        
+        if headers is None and html is None and cookies is None:
+            return False, {
+                'headers': {},
+                'html': '',
+                'cookies': {},
+                'error': 'Page fetch failed completely'
+            }
+        
+        return True, {
+            'headers': headers or {},
+            'html': html or '',
+            'cookies': cookies or {},
+        }
+    
     def fetch_page(self) -> Tuple[Optional[Dict[str, str]], Optional[str], Optional[Dict[str, str]]]:
         """
         Fetch target page for analysis.
@@ -119,15 +178,22 @@ class TechDetector:
                 verify=self.verify_ssl
             )
             
-            headers = dict(response.headers)
-            html = response.text
+            if response.status_code >= 400:
+                self.errors.append(f"Page returned error status: {response.status_code}")
+                # Still try to process if we got a response
             
-            cookies = {}
-            for cookie in response.cookies:
-                cookies[cookie.name] = cookie.value
+            headers = self._safe_get_headers(response)
+            html = response.text if response.text else ''
+            cookies = self._safe_get_cookies(response)
             
             return headers, html, cookies
             
+        except Timeout as e:
+            self.errors.append(f"Page fetch timed out: {str(e)}")
+            return None, None, None
+        except ConnectionError as e:
+            self.errors.append(f"Connection error: {str(e)}")
+            return None, None, None
         except RequestException as e:
             self.errors.append(f"Page fetch failed: {str(e)}")
             return None, None, None
@@ -155,6 +221,10 @@ class TechDetector:
         Returns:
             True if technology detected
         """
+        # Guard against empty data
+        if not html and not headers and not cookies:
+            return False
+        
         if 'headers' in signatures:
             for header_name, pattern in signatures['headers'].items():
                 header_value = headers.get(header_name, '')
@@ -166,7 +236,7 @@ class TechDetector:
                             actual_value = v
                             break
                     
-                    if re.search(pattern, actual_value, re.IGNORECASE):
+                    if actual_value and re.search(pattern, actual_value, re.IGNORECASE):
                         return True
         
         if 'html' in signatures and html:
@@ -174,7 +244,7 @@ class TechDetector:
                 if re.search(pattern, html, re.IGNORECASE):
                     return True
         
-        if 'cookies' in signatures:
+        if 'cookies' in signatures and cookies:
             for cookie_name in signatures['cookies']:
                 if cookie_name.lower() in [c.lower() for c in cookies]:
                     return True
@@ -204,6 +274,34 @@ class TechDetector:
         
         return False
     
+    def _extract_technologies(
+        self,
+        headers: Dict[str, str],
+        html: str,
+        cookies: Dict[str, str]
+    ) -> Dict[str, List[str]]:
+        """
+        Extract all technologies from response data.
+        
+        Args:
+            headers: HTTP response headers
+            html: HTML content
+            cookies: Response cookies
+            
+        Returns:
+            Dictionary of detected technologies by category
+        """
+        detected = {}
+        
+        for category, technologies in self.TECHNOLOGY_SIGNATURES.items():
+            detected[category] = []
+            
+            for tech_name, signatures in technologies.items():
+                if self.detect_technology(category, tech_name, signatures, headers, html, cookies):
+                    detected[category].append(tech_name)
+        
+        return detected
+    
     def run(self) -> Dict[str, Any]:
         """
         Run technology detection.
@@ -213,21 +311,30 @@ class TechDetector:
         """
         headers, html, cookies = self.fetch_page()
         
-        if not html:
+        # Validate the fetch result
+        success, data = self._check_page_fetch((headers, html, cookies))
+        
+        if not success:
             return {
                 'findings': [],
                 'errors': self.errors,
                 'technologies': {},
+                'total_detected': 0,
+                'fetch_status': 'failed',
+                'error': data.get('error', 'Unknown fetch error'),
             }
         
-        detected = {}
+        # Validate HTML content
+        if not self._validate_html(data.get('html', '')):
+            self.errors.append("No HTML content received or content is empty")
+            # Still try to detect from headers and cookies if available
         
-        for category, technologies in self.TECHNOLOGY_SIGNATURES.items():
-            detected[category] = []
-            
-            for tech_name, signatures in technologies.items():
-                if self.detect_technology(category, tech_name, signatures, headers, html, cookies):
-                    detected[category].append(tech_name)
+        # Extract technologies
+        detected = self._extract_technologies(
+            data.get('headers', {}),
+            data.get('html', ''),
+            data.get('cookies', {})
+        )
         
         total_technologies = sum(len(v) for v in detected.values())
         
@@ -256,6 +363,15 @@ class TechDetector:
                     'description': f'CMS: {", ".join(detected["cms"])}',
                     'remediation': 'Keep CMS and plugins updated to latest versions',
                 })
+        else:
+            # No technologies detected
+            findings.append({
+                'type': 'No Technologies Detected',
+                'severity': 'info',
+                'target': self.target,
+                'description': 'No recognizable technologies were detected',
+                'remediation': 'Manual review may be required for custom/unknown technologies',
+            })
         
         return {
             'findings': findings,
@@ -263,4 +379,5 @@ class TechDetector:
             'target': self.target,
             'technologies': detected,
             'total_detected': total_technologies,
+            'fetch_status': 'success' if data.get('html') else 'partial',
         }
