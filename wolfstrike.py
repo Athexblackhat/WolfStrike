@@ -15,6 +15,7 @@ import sys
 import os
 import signal
 import traceback
+import re
 from typing import Optional, Dict, Any
 
 # Add project root to Python path
@@ -55,12 +56,119 @@ class WolfStrike:
         self.banner = Banner()
         self.args = None
         self.target = None
+        self.scan_status: str = 'initialized'
+        self._no_color = False
         
         # Register signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         
         self.logger.info("WOLFSTRIKE initialized successfully")
+    
+    def _should_use_color(self) -> bool:
+        """
+        Determine if color output should be used.
+        
+        Returns:
+            True if color should be used
+        """
+        # Check if no_color flag is set
+        if self._no_color:
+            return False
+        
+        # Check if NO_COLOR environment variable is set
+        if os.environ.get('NO_COLOR'):
+            return False
+        
+        # Check if TERM environment variable is set
+        term = os.environ.get('TERM', '')
+        if not term or term == 'dumb':
+            return False
+        
+        # Check if we're on Windows without ANSI support
+        if sys.platform == 'win32':
+            # Check for ANSI support on Windows
+            if hasattr(sys, 'getwindowsversion'):
+                # Windows 10+ has ANSI support
+                try:
+                    import ctypes
+                    kernel32 = ctypes.windll.kernel32
+                    if kernel32.GetConsoleMode:
+                        return True
+                except Exception:
+                    return False
+            return False
+        
+        # Check if output is a terminal
+        if not sys.stdout.isatty():
+            return False
+        
+        return True
+    
+    def _strip_ansi(self, text: str) -> str:
+        """
+        Strip ANSI escape codes from text.
+        
+        Args:
+            text: Text with ANSI codes
+            
+        Returns:
+            Plain text without ANSI codes
+        """
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        return ansi_escape.sub('', text)
+    
+    def _safe_print(self, text: str, use_color: bool = True) -> None:
+        """
+        Safely print text with color fallback.
+        
+        Args:
+            text: Text to print
+            use_color: Whether to use color
+        """
+        if not use_color or not self._should_use_color():
+            text = self._strip_ansi(text)
+        print(text)
+    
+    def _get_terminal_size(self) -> tuple:
+        """
+        Get terminal size with fallback.
+        
+        Returns:
+            Tuple of (width, height)
+        """
+        try:
+            import shutil
+            return shutil.get_terminal_size()
+        except Exception:
+            return (80, 24)
+    
+    def _check_color_support(self) -> bool:
+        """
+        Check if terminal supports ANSI colors.
+        
+        Returns:
+            True if ANSI colors are supported
+        """
+        # Try to detect via environment
+        if 'ANSICON' in os.environ:
+            return True
+        
+        # Check for color term
+        term = os.environ.get('TERM', '')
+        if term in ('xterm', 'xterm-256color', 'xterm-color', 'screen', 'screen-256color'):
+            return True
+        
+        # Windows 10+ supports ANSI
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                return bool(kernel32.GetConsoleMode)
+            except Exception:
+                return False
+        
+        return False
     
     def _signal_handler(self, signum: int, frame: Any) -> None:
         """
@@ -71,7 +179,7 @@ class WolfStrike:
             frame: Current stack frame
         """
         self.logger.warning(f"Received signal {signum}. Shutting down gracefully...")
-        print("\n[*] Scan interrupted by user. Saving progress...")
+        self._safe_print("\n[*] Scan interrupted by user. Saving progress...")
         self._cleanup()
         sys.exit(0)
     
@@ -100,6 +208,11 @@ class WolfStrike:
             team=self.TEAM
         )
         self.args = parser.parse_args()
+        
+        # Check for no-color flag
+        if hasattr(self.args, 'no_color') and self.args.no_color:
+            self._no_color = True
+        
         return self.args
     
     def validate_target(self, target: str) -> bool:
@@ -164,6 +277,11 @@ class WolfStrike:
         if self.args:
             config = self.config_manager.override_from_args(config, self.args)
         
+        # Apply no_color from args if set
+        if self._no_color:
+            config['general'] = config.get('general', {})
+            config['general']['no_color'] = True
+        
         if not self.config_manager.validate_config(config):
             raise ConfigurationError("Invalid configuration detected")
         
@@ -176,7 +294,7 @@ class WolfStrike:
         platform_info = self.platform_checker.get_platform_info()
         
         if platform_info['is_termux']:
-            print(self.banner.get_termux_warning())
+            self._safe_print(self.banner.get_termux_warning())
             self.logger.warning("Running in Termux environment - Limited features")
         elif platform_info['platform'] == 'linux':
             if platform_info['is_root']:
@@ -232,7 +350,9 @@ class WolfStrike:
             platform_checker=self.platform_checker,
             logger=self.logger
         )
+        self.scan_status = 'running'
         engine.run_full_scan()
+        self.scan_status = 'completed'
     
     def _run_single_module(self, module_name: str, config: Dict[str, Any]) -> None:
         """
@@ -264,11 +384,14 @@ class WolfStrike:
         try:
             module = importlib.import_module(module_path)
             if hasattr(module, 'run'):
+                self.scan_status = 'running'
                 module.run(target=self.target, config=config)
+                self.scan_status = 'completed'
             else:
                 raise WolfStrikeException(f"Module {module_path} has no run() function")
         except ImportError as e:
             self.logger.error(f"Failed to import module {module_path}: {str(e)}")
+            self.scan_status = 'failed'
             raise WolfStrikeException(f"Module {module_path} not found")
     
     def run(self) -> None:
@@ -277,7 +400,9 @@ class WolfStrike:
         Parses arguments, validates input, and dispatches to modules.
         """
         try:
-            print(self.banner.get_main_banner())
+            # Get banner and strip colors if needed
+            banner_text = self.banner.get_main_banner()
+            self._safe_print(banner_text, use_color=self._should_use_color())
             
             self.parse_arguments()
             
@@ -289,14 +414,14 @@ class WolfStrike:
             
             if not self.args.target:
                 self.logger.error("No target specified")
-                print("Error: No target specified. Use --target <url> or -t <url>")
-                print("Use --help for more information")
+                self._safe_print("\n" + self._strip_ansi("Error: No target specified. Use --target <url> or -t <url>"))
+                self._safe_print("Use --help for more information")
                 sys.exit(1)
             
             if not self.validate_target(self.args.target):
                 self.logger.error(f"Invalid target: {self.args.target}")
-                print(f"Error: Invalid target '{self.args.target}'")
-                print("Please provide a valid URL or IP address")
+                self._safe_print(f"\nError: Invalid target '{self.args.target}'")
+                self._safe_print("Please provide a valid URL or IP address")
                 sys.exit(1)
             
             self.target = self.normalize_target(self.args.target)
@@ -311,23 +436,27 @@ class WolfStrike:
             module_name = self._get_module_name()
             self.dispatch_module(module_name, config)
             
+            # Print completion message
+            self._safe_print(f"\n[*] Scan completed successfully!")
+            self._safe_print(f"[*] Status: {self.scan_status}")
+            
         except ConfigurationError as e:
             self.logger.error(f"Configuration error: {str(e)}")
-            print(f"Configuration Error: {str(e)}")
+            self._safe_print(f"\nConfiguration Error: {str(e)}")
             sys.exit(1)
         except WolfStrikeException as e:
             self.logger.error(f"WolfStrike error: {str(e)}")
-            print(f"Error: {str(e)}")
+            self._safe_print(f"\nError: {str(e)}")
             sys.exit(1)
         except KeyboardInterrupt:
             self.logger.info("Scan interrupted by user")
-            print("\n[*] Scan interrupted by user")
+            self._safe_print("\n[*] Scan interrupted by user")
             self._cleanup()
             sys.exit(0)
         except Exception as e:
             self.logger.error(f"Unexpected error: {str(e)}")
             self.logger.debug(traceback.format_exc())
-            print(f"Unexpected Error: {str(e)}")
+            self._safe_print(f"\nUnexpected Error: {str(e)}")
             if hasattr(self.args, 'debug') and self.args.debug:
                 traceback.print_exc()
             sys.exit(1)
