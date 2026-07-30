@@ -13,7 +13,7 @@ and identifies potential bypass techniques.
 from typing import Dict, List, Any, Optional, Tuple
 
 import requests
-from requests.exceptions import RequestException
+from requests.exceptions import RequestException, Timeout, ConnectionError
 
 
 class WAFDetector:
@@ -110,6 +110,65 @@ class WAFDetector:
         self.detected_wafs: List[str] = []
         self.errors: List[str] = []
     
+    def _safe_get_headers(self, response: Optional[requests.Response]) -> Dict[str, str]:
+        """Safely get headers from response with fallback."""
+        if response and hasattr(response, 'headers'):
+            return dict(response.headers)
+        return {}
+    
+    def _safe_get_cookies(self, response: Optional[requests.Response]) -> Dict[str, str]:
+        """Safely get cookies from response with fallback."""
+        cookies = {}
+        if response and hasattr(response, 'cookies'):
+            for cookie in response.cookies:
+                cookies[cookie.name] = cookie.value
+        return cookies
+    
+    def _safe_get_text(self, response: Optional[requests.Response]) -> str:
+        """Safely get response text with fallback."""
+        if response and hasattr(response, 'text'):
+            return response.text or ''
+        return ''
+    
+    def _is_valid_response(self, response: Optional[requests.Response]) -> bool:
+        """Check if response is valid for analysis."""
+        if response is None:
+            return False
+        if not hasattr(response, 'status_code'):
+            return False
+        return True
+    
+    def _check_response_status(self, response: Optional[requests.Response]) -> bool:
+        """Check if response status is acceptable."""
+        if not self._is_valid_response(response):
+            return False
+        # Consider 200-399 as acceptable for WAF detection
+        return 200 <= response.status_code < 400
+    
+    def _validate_baseline(self, result: Tuple) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Validate baseline fetch result.
+        
+        Returns:
+            Tuple of (success, data_dict)
+        """
+        headers, text, cookies = result
+        
+        # Check if any data was received
+        if headers is None and text is None and cookies is None:
+            return False, {
+                'headers': {},
+                'text': '',
+                'cookies': {},
+                'error': 'Baseline fetch failed completely'
+            }
+        
+        return True, {
+            'headers': headers or {},
+            'text': text or '',
+            'cookies': cookies or {},
+        }
+    
     def fetch_baseline(self) -> Tuple[Optional[Dict[str, str]], Optional[str], Optional[Dict[str, str]]]:
         """
         Fetch baseline response for comparison.
@@ -124,15 +183,22 @@ class WAFDetector:
                 verify=self.verify_ssl
             )
             
-            headers = dict(response.headers)
-            text = response.text
+            headers = self._safe_get_headers(response)
+            text = self._safe_get_text(response)
+            cookies = self._safe_get_cookies(response)
             
-            cookies = {}
-            for cookie in response.cookies:
-                cookies[cookie.name] = cookie.value
+            # Even if status is not 200, we might still have useful data
+            if response.status_code >= 400:
+                self.errors.append(f"Baseline returned status: {response.status_code}")
             
             return headers, text, cookies
             
+        except Timeout as e:
+            self.errors.append(f"Baseline fetch timed out: {str(e)}")
+            return None, None, None
+        except ConnectionError as e:
+            self.errors.append(f"Connection error: {str(e)}")
+            return None, None, None
         except RequestException as e:
             self.errors.append(f"Baseline fetch failed: {str(e)}")
             return None, None, None
@@ -179,21 +245,29 @@ class WAFDetector:
         """
         detected = []
         
+        # Guard against empty data
+        if not headers and not text and not cookies:
+            return detected
+        
         for waf_name, signatures in self.WAF_SIGNATURES.items():
             is_detected = False
             
-            for header in signatures.get('headers', []):
-                if header.lower() in [h.lower() for h in headers]:
-                    is_detected = True
-                    break
+            # Check headers
+            if headers:
+                for header in signatures.get('headers', []):
+                    if header.lower() in [h.lower() for h in headers]:
+                        is_detected = True
+                        break
             
-            if not is_detected:
+            # Check cookies
+            if not is_detected and cookies:
                 for cookie in signatures.get('cookies', []):
                     if cookie.lower() in [c.lower() for c in cookies]:
                         is_detected = True
                         break
             
-            if not is_detected:
+            # Check response patterns
+            if not is_detected and text:
                 for pattern in signatures.get('response_patterns', []):
                     if pattern.lower() in text.lower():
                         is_detected = True
@@ -214,11 +288,11 @@ class WAFDetector:
         for payload in self.WAF_TEST_PAYLOADS:
             response = self.test_payload(payload)
             
-            if response:
+            if self._is_valid_response(response):
                 if response.status_code in [403, 406, 501]:
-                    headers = dict(response.headers)
-                    text = response.text
-                    cookies = {c.name: c.value for c in response.cookies}
+                    headers = self._safe_get_headers(response)
+                    text = self._safe_get_text(response)
+                    cookies = self._safe_get_cookies(response)
                     
                     behavioral_wafs = self.detect_from_signatures(headers, text, cookies)
                     
@@ -226,6 +300,26 @@ class WAFDetector:
                         return behavioral_wafs
         
         return []
+    
+    def _detect_from_headers_only(self, headers: Dict[str, str]) -> List[str]:
+        """
+        Detect WAF from headers only (when no text/cookies available).
+        
+        Args:
+            headers: Response headers
+            
+        Returns:
+            List of detected WAF names
+        """
+        detected = []
+        
+        for waf_name, signatures in self.WAF_SIGNATURES.items():
+            for header in signatures.get('headers', []):
+                if header.lower() in [h.lower() for h in headers]:
+                    detected.append(waf_name)
+                    break
+        
+        return detected
     
     def run(self) -> Dict[str, Any]:
         """
@@ -236,15 +330,38 @@ class WAFDetector:
         """
         headers, text, cookies = self.fetch_baseline()
         
-        if not text:
+        # Validate baseline
+        success, data = self._validate_baseline((headers, text, cookies))
+        
+        if not success:
             return {
                 'findings': [],
                 'errors': self.errors,
                 'waf_detected': [],
+                'has_waf': False,
+                'detection_status': 'failed',
+                'error': data.get('error', 'Unknown error'),
             }
         
-        signature_wafs = self.detect_from_signatures(headers, text, cookies)
-        behavioral_wafs = self.detect_from_behavior()
+        # Try to detect from available data
+        signature_wafs = []
+        behavioral_wafs = []
+        
+        # Always try signature detection if we have any data
+        if data.get('headers') or data.get('text') or data.get('cookies'):
+            signature_wafs = self.detect_from_signatures(
+                data.get('headers', {}),
+                data.get('text', ''),
+                data.get('cookies', {})
+            )
+        
+        # If we have text, try behavioral detection
+        if data.get('text'):
+            behavioral_wafs = self.detect_from_behavior()
+        
+        # If no data at all, try headers-only detection
+        if not signature_wafs and not behavioral_wafs and data.get('headers'):
+            signature_wafs = self._detect_from_headers_only(data.get('headers', {}))
         
         all_wafs = list(set(signature_wafs + behavioral_wafs))
         
@@ -259,17 +376,33 @@ class WAFDetector:
                 'evidence': {
                     'detected_wafs': all_wafs,
                     'detection_method': 'signature' if signature_wafs else 'behavioral',
+                    'has_text_response': bool(data.get('text')),
+                    'has_headers': bool(data.get('headers')),
                 },
                 'remediation': 'Review WAF configuration. Consider WAF bypass testing.',
             })
         else:
-            findings.append({
-                'type': 'No WAF Detected',
-                'severity': 'info',
-                'target': self.target,
-                'description': 'No Web Application Firewall detected',
-                'remediation': 'Consider implementing a WAF for additional protection',
-            })
+            # Check if we had enough data to make a determination
+            if data.get('text') or data.get('headers'):
+                findings.append({
+                    'type': 'No WAF Detected',
+                    'severity': 'info',
+                    'target': self.target,
+                    'description': 'No Web Application Firewall detected',
+                    'evidence': {
+                        'has_text_response': bool(data.get('text')),
+                        'has_headers': bool(data.get('headers')),
+                    },
+                    'remediation': 'Consider implementing a WAF for additional protection',
+                })
+            else:
+                findings.append({
+                    'type': 'WAF Detection Inconclusive',
+                    'severity': 'info',
+                    'target': self.target,
+                    'description': 'Insufficient data to determine WAF presence',
+                    'remediation': 'Manual review required',
+                })
         
         return {
             'findings': findings,
@@ -277,4 +410,10 @@ class WAFDetector:
             'target': self.target,
             'waf_detected': all_wafs,
             'has_waf': len(all_wafs) > 0,
+            'detection_status': 'success' if (data.get('text') or data.get('headers')) else 'partial',
+            'data_available': {
+                'headers': bool(data.get('headers')),
+                'text': bool(data.get('text')),
+                'cookies': bool(data.get('cookies')),
+            },
         }
