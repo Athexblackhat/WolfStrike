@@ -13,7 +13,7 @@ DNS brute force, and certificate transparency.
 import re
 import time
 import concurrent.futures
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Any, Optional, Set, Tuple
 
 import dns.resolver
 import requests
@@ -75,9 +75,112 @@ class SubdomainEnumerator:
         self.timeout = self.config.get('timeout', 10)
         self.threads = self.config.get('threads', 50)
         self.wordlist = self.config.get('wordlist', [])
+        self.max_wordlist_size = self.config.get('max_wordlist_size', 50000)
         
         self.subdomains: Set[str] = set()
         self.errors: List[str] = []
+        self._resolver_cache: Dict[str, Optional[str]] = {}
+    
+    def _validate_domain(self) -> bool:
+        """
+        Validate that domain is valid.
+        
+        Returns:
+            True if domain is valid
+        """
+        if not self.domain:
+            self.errors.append("Domain is empty")
+            return False
+        
+        # Basic domain validation
+        domain_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$'
+        if not re.match(domain_pattern, self.domain):
+            self.errors.append(f"Invalid domain format: {self.domain}")
+            return False
+        
+        return True
+    
+    def _validate_wordlist(self, wordlist: List[str]) -> bool:
+        """
+        Validate wordlist before use.
+        
+        Args:
+            wordlist: List of subdomain prefixes
+            
+        Returns:
+            True if wordlist is valid
+        """
+        if not wordlist:
+            return False
+        
+        if not isinstance(wordlist, list):
+            return False
+        
+        # Remove empty strings and duplicates
+        cleaned = [w.strip() for w in wordlist if w and w.strip()]
+        if not cleaned:
+            return False
+        
+        return True
+    
+    def _get_wordlist(self) -> List[str]:
+        """
+        Get wordlist with proper fallback.
+        
+        Returns:
+            Valid wordlist
+        """
+        # Try custom wordlist first
+        if self.wordlist and self._validate_wordlist(self.wordlist):
+            return self.wordlist[:self.max_wordlist_size]
+        
+        # Use default wordlist
+        return self.COMMON_SUBDOMAINS
+    
+    def _chunk_wordlist(self, wordlist: List[str], chunk_size: int = 1000) -> List[List[str]]:
+        """
+        Split wordlist into chunks for better performance.
+        
+        Args:
+            wordlist: List of subdomain prefixes
+            chunk_size: Size of each chunk
+            
+        Returns:
+            List of wordlist chunks
+        """
+        if not wordlist:
+            return []
+        
+        return [wordlist[i:i + chunk_size] for i in range(0, len(wordlist), chunk_size)]
+    
+    def _normalize_subdomain(self, name: str) -> Optional[str]:
+        """
+        Normalize a subdomain string.
+        
+        Args:
+            name: Subdomain name
+            
+        Returns:
+            Normalized subdomain or None
+        """
+        if not name:
+            return None
+        
+        # Remove wildcard prefix
+        name = name.replace('*.', '')
+        
+        # Clean and lowercase
+        name = name.strip().lower()
+        
+        # Skip if empty
+        if not name:
+            return None
+        
+        # Skip if not ending with domain (unless it's the domain itself)
+        if not name.endswith('.' + self.domain) and name != self.domain:
+            return None
+        
+        return name
     
     def passive_enum_crtsh(self) -> Set[str]:
         """
@@ -99,11 +202,9 @@ class SubdomainEnumerator:
                     name_value = entry.get('name_value', '')
                     
                     for name in name_value.split('\n'):
-                        name = name.strip().lower()
-                        name = name.replace('*.', '')
-                        
-                        if name.endswith('.' + self.domain) or name == self.domain:
-                            subdomains.add(name)
+                        normalized = self._normalize_subdomain(name)
+                        if normalized:
+                            subdomains.add(normalized)
                             
         except (RequestException, ValueError) as e:
             self.errors.append(f"crt.sh enumeration failed: {str(e)}")
@@ -129,14 +230,64 @@ class SubdomainEnumerator:
                 for line in lines:
                     if ',' in line:
                         hostname = line.split(',')[0].strip().lower()
-                        
-                        if hostname.endswith('.' + self.domain) or hostname == self.domain:
-                            subdomains.add(hostname)
+                        normalized = self._normalize_subdomain(hostname)
+                        if normalized:
+                            subdomains.add(normalized)
                             
         except RequestException as e:
             self.errors.append(f"HackerTarget enumeration failed: {str(e)}")
         
         return subdomains
+    
+    def _check_subdomain(self, prefix: str) -> Optional[str]:
+        """
+        Check a single subdomain prefix via DNS resolution.
+        
+        Args:
+            prefix: Subdomain prefix
+            
+        Returns:
+            Subdomain if found, None otherwise
+        """
+        if not prefix or not prefix.strip():
+            return None
+        
+        subdomain = f"{prefix.strip()}.{self.domain}"
+        
+        # Check cache first
+        if subdomain in self._resolver_cache:
+            return self._resolver_cache[subdomain]
+        
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 3
+        resolver.lifetime = 3
+        
+        # Try A record
+        try:
+            answers = resolver.resolve(subdomain, 'A')
+            for answer in answers:
+                ip = answer.to_text()
+                if ip:
+                    self._resolver_cache[subdomain] = subdomain
+                    return subdomain
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.Timeout):
+            pass
+        except Exception:
+            pass
+        
+        # Try CNAME record
+        try:
+            answers = resolver.resolve(subdomain, 'CNAME')
+            for answer in answers:
+                cname = answer.to_text().rstrip('.')
+                if cname:
+                    self._resolver_cache[subdomain] = subdomain
+                    return subdomain
+        except Exception:
+            pass
+        
+        self._resolver_cache[subdomain] = None
+        return None
     
     def dns_brute_force(self, wordlist: Optional[List[str]] = None) -> Set[str]:
         """
@@ -150,56 +301,38 @@ class SubdomainEnumerator:
         """
         subdomains = set()
         
+        # Get wordlist with fallback
         if wordlist is None:
-            wordlist = self.wordlist if self.wordlist else self.COMMON_SUBDOMAINS
+            wordlist = self._get_wordlist()
         
-        resolver = dns.resolver.Resolver()
-        resolver.timeout = 3
-        resolver.lifetime = 3
+        # Validate wordlist
+        if not self._validate_wordlist(wordlist):
+            self.errors.append("No valid wordlist entries found for DNS brute force")
+            return subdomains
         
-        def check_subdomain(prefix: str) -> Optional[str]:
-            subdomain = f"{prefix}.{self.domain}"
-            
-            try:
-                answers = resolver.resolve(subdomain, 'A')
+        # Limit wordlist size
+        if len(wordlist) > self.max_wordlist_size:
+            wordlist = wordlist[:self.max_wordlist_size]
+            self.errors.append(f"Wordlist truncated to {self.max_wordlist_size} entries")
+        
+        # Chunk wordlist for better performance
+        chunks = self._chunk_wordlist(wordlist, chunk_size=500)
+        
+        for chunk in chunks:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as executor:
+                future_to_prefix = {
+                    executor.submit(self._check_subdomain, prefix): prefix
+                    for prefix in chunk
+                }
                 
-                for answer in answers:
-                    ip = answer.to_text()
-                    if ip:
-                        return subdomain
-                        
-            except dns.resolver.NXDOMAIN:
-                pass
-            except dns.resolver.NoAnswer:
-                pass
-            except dns.exception.Timeout:
-                pass
-            except Exception:
-                pass
-            
-            try:
-                answers = resolver.resolve(subdomain, 'CNAME')
-                
-                for answer in answers:
-                    cname = answer.to_text().rstrip('.')
-                    if cname:
-                        return subdomain
-                        
-            except Exception:
-                pass
-            
-            return None
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as executor:
-            future_to_prefix = {
-                executor.submit(check_subdomain, prefix): prefix
-                for prefix in wordlist
-            }
-            
-            for future in concurrent.futures.as_completed(future_to_prefix):
-                result = future.result()
-                if result:
-                    subdomains.add(result)
+                for future in concurrent.futures.as_completed(future_to_prefix):
+                    try:
+                        result = future.result()
+                        if result:
+                            subdomains.add(result)
+                    except Exception as e:
+                        # Individual failure should not break the whole scan
+                        pass
         
         return subdomains
     
@@ -210,16 +343,45 @@ class SubdomainEnumerator:
         Returns:
             Set of all discovered subdomains
         """
+        # Validate domain first
+        if not self._validate_domain():
+            return set()
+        
+        # Passive enumeration
         crtsh_results = self.passive_enum_crtsh()
         self.subdomains.update(crtsh_results)
         
         hackertarget_results = self.passive_enum_hackertarget()
         self.subdomains.update(hackertarget_results)
         
+        # DNS brute force
         brute_results = self.dns_brute_force()
         self.subdomains.update(brute_results)
         
         return self.subdomains
+    
+    def _resolve_single(self, subdomain: str) -> Tuple[str, List[str]]:
+        """
+        Resolve a single subdomain to IP addresses.
+        
+        Args:
+            subdomain: Subdomain to resolve
+            
+        Returns:
+            Tuple of (subdomain, list of IPs)
+        """
+        ips = []
+        
+        try:
+            answers = dns.resolver.resolve(subdomain, 'A')
+            for answer in answers:
+                ips.append(answer.to_text())
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.exception.Timeout):
+            pass
+        except Exception:
+            pass
+        
+        return subdomain, ips
     
     def resolve_subdomains(self, subdomains: Optional[Set[str]] = None) -> Dict[str, List[str]]:
         """
@@ -234,31 +396,19 @@ class SubdomainEnumerator:
         if subdomains is None:
             subdomains = self.subdomains
         
+        if not subdomains:
+            return {}
+        
         resolved = {}
         
-        def resolve_single(subdomain: str) -> tuple:
-            ips = []
-            
-            try:
-                answers = dns.resolver.resolve(subdomain, 'A')
-                
-                for answer in answers:
-                    ips.append(answer.to_text())
-                    
-            except Exception:
-                pass
-            
-            return subdomain, ips
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.threads) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(self.threads, 20)) as executor:
             futures = {
-                executor.submit(resolve_single, sub): sub
+                executor.submit(self._resolve_single, sub): sub
                 for sub in subdomains
             }
             
             for future in concurrent.futures.as_completed(futures):
                 subdomain, ips = future.result()
-                
                 if ips:
                     resolved[subdomain] = ips
         
@@ -288,6 +438,14 @@ class SubdomainEnumerator:
                 },
                 'remediation': 'Review subdomains for security, remove unnecessary DNS records',
             })
+        else:
+            findings.append({
+                'type': 'No Subdomains Discovered',
+                'severity': 'info',
+                'domain': self.domain,
+                'description': 'No subdomains were discovered during enumeration',
+                'remediation': 'Manual review may be required for hidden subdomains',
+            })
         
         sensitive_subdomains = [
             sub for sub in all_subdomains
@@ -316,4 +474,5 @@ class SubdomainEnumerator:
             'resolved': resolved,
             'total_discovered': len(all_subdomains),
             'total_resolved': len(resolved),
+            'wordlist_size': len(self._get_wordlist()),
         }
