@@ -13,6 +13,7 @@ manages scan lifecycle, and coordinates results collection.
 import time
 import uuid
 import traceback
+import importlib
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -88,6 +89,9 @@ class ScanEngine:
         self.vulnerabilities: List[Dict[str, Any]] = []
         self.errors: List[str] = []
         self.total_requests = 0
+        self._total_modules = 0
+        self._completed_modules = 0
+        self._module_cache: Dict[str, Any] = {}
 
         self.start_time = 0.0
         self.end_time = 0.0
@@ -107,6 +111,116 @@ class ScanEngine:
             'osint': 'modules.osint',
         }
 
+    def _normalize_finding(self, finding: Any) -> Dict[str, Any]:
+        """
+        Normalize a finding to a consistent dictionary format.
+        
+        Args:
+            finding: Raw finding from module
+            
+        Returns:
+            Normalized finding dictionary
+        """
+        if isinstance(finding, dict):
+            # Ensure required fields exist
+            normalized = finding.copy()
+            if 'type' not in normalized:
+                normalized['type'] = 'Unknown'
+            if 'severity' not in normalized:
+                normalized['severity'] = 'info'
+            if 'description' not in normalized:
+                normalized['description'] = str(finding)
+            if 'endpoint' not in normalized:
+                normalized['endpoint'] = self.target
+            return normalized
+        elif isinstance(finding, str):
+            return {
+                'type': 'Finding',
+                'severity': 'info',
+                'description': finding,
+                'endpoint': self.target,
+            }
+        else:
+            return {
+                'type': 'Unknown',
+                'severity': 'info',
+                'description': str(finding),
+                'endpoint': self.target,
+            }
+
+    def _validate_module_result(self, result: Any) -> Dict[str, Any]:
+        """
+        Validate and normalize module result.
+        
+        Args:
+            result: Raw result from module
+            
+        Returns:
+            Validated result dictionary with findings and errors
+        """
+        if result is None:
+            return {'findings': [], 'errors': ['Module returned None']}
+        
+        if isinstance(result, dict):
+            # Ensure findings is a list
+            findings = result.get('findings', [])
+            if not isinstance(findings, list):
+                findings = [findings] if findings else []
+            
+            # Normalize each finding
+            normalized_findings = [self._normalize_finding(f) for f in findings]
+            
+            # Ensure errors is a list
+            errors = result.get('errors', [])
+            if not isinstance(errors, list):
+                errors = [str(errors)] if errors else []
+            
+            return {
+                'findings': normalized_findings,
+                'errors': errors,
+            }
+        elif isinstance(result, list):
+            # List of findings
+            return {
+                'findings': [self._normalize_finding(f) for f in result],
+                'errors': [],
+            }
+        else:
+            # Single result
+            return {
+                'findings': [self._normalize_finding(result)],
+                'errors': [],
+            }
+
+    def _check_module_availability(self, module_name: str) -> bool:
+        """
+        Check if a module is available and importable.
+        
+        Args:
+            module_name: Name of the module
+            
+        Returns:
+            True if module is available
+        """
+        if module_name not in self._module_registry:
+            return False
+        
+        module_path = self._module_registry[module_name]
+        
+        try:
+            if module_path in self._module_cache:
+                return True
+            importlib.import_module(module_path)
+            return True
+        except ImportError:
+            return False
+
+    def _update_progress(self, module_name: str, success: bool) -> None:
+        """Update progress counters."""
+        self._completed_modules += 1
+        if not success:
+            self._total_modules = max(self._total_modules, self._completed_modules)
+
     def run_quick_scan(self, modules: Optional[List[str]] = None) -> ScanResult:
         self.mode = ScanMode.QUICK
         self.logger.info("Starting quick scan")
@@ -118,11 +232,13 @@ class ScanEngine:
         self.mode = ScanMode.FULL
         self.logger.info("Starting full power scan")
         modules = list(self._module_registry.keys())
+        self._total_modules = len(modules)
         return self._execute_scan(modules)
 
     def run_custom_scan(self, modules: List[str]) -> ScanResult:
         self.mode = ScanMode.CUSTOM
         self.logger.info(f"Starting custom scan with modules: {modules}")
+        self._total_modules = len(modules)
         return self._execute_scan(modules)
 
     def run_stealth_scan(self, modules: Optional[List[str]] = None) -> ScanResult:
@@ -131,11 +247,13 @@ class ScanEngine:
         self.logger.info("Starting stealth scan")
         if modules is None:
             modules = ['recon', 'scanner', 'vuln_scanner']
+        self._total_modules = len(modules)
         return self._execute_scan(modules)
 
     def _execute_scan(self, modules: List[str]) -> ScanResult:
         self.status = ScanStatus.RUNNING
         self.start_time = time.time()
+        self._completed_modules = 0
 
         scan_result = ScanResult(
             scan_id=self.scan_id,
@@ -150,14 +268,25 @@ class ScanEngine:
             }
         )
 
-        valid_modules = [m for m in modules if m in self._module_registry]
-        invalid_modules = [m for m in modules if m not in self._module_registry]
+        valid_modules = []
+        invalid_modules = []
+
+        for module_name in modules:
+            if module_name in self._module_registry:
+                if self._check_module_availability(module_name):
+                    valid_modules.append(module_name)
+                else:
+                    invalid_modules.append(f"{module_name} (module not importable)")
+            else:
+                invalid_modules.append(f"{module_name} (not in registry)")
 
         if invalid_modules:
             self.logger.warning(f"Invalid modules ignored: {invalid_modules}")
 
         if not valid_modules:
-            raise ScanError("No valid modules specified for scan")
+            raise ScanError(f"No valid modules specified for scan. Invalid: {invalid_modules}")
+
+        self._total_modules = len(valid_modules)
 
         for module_name in valid_modules:
             try:
@@ -171,6 +300,8 @@ class ScanEngine:
                 if result.errors:
                     self.errors.extend(result.errors)
 
+                self._update_progress(module_name, result.success)
+
             except Exception as e:
                 self.logger.error(f"Module {module_name} failed: {str(e)}")
                 self.errors.append(f"Module {module_name}: {str(e)}")
@@ -182,6 +313,7 @@ class ScanEngine:
                     execution_time=0.0,
                     metadata={}
                 )
+                self._update_progress(module_name, False)
 
         self.status = ScanStatus.COMPLETED
         self.end_time = time.time()
@@ -215,8 +347,6 @@ class ScanEngine:
         return scan_result
 
     def _run_module(self, module_name: str) -> ModuleResult:
-        import importlib
-
         self.logger.info(f"Executing module: {module_name}")
         start_time = time.time()
         findings = []
@@ -225,21 +355,33 @@ class ScanEngine:
 
         try:
             module_path = self._module_registry[module_name]
-            module = importlib.import_module(module_path)
+            
+            # Use cached module if available
+            if module_path not in self._module_cache:
+                self._module_cache[module_path] = importlib.import_module(module_path)
+            
+            module = self._module_cache[module_path]
 
             if hasattr(module, 'run'):
-                result = module.run(
-                    target=self.target,
-                    config=self.config.get(module_name, {})
-                )
-
-                if isinstance(result, dict):
-                    findings = result.get('findings', [])
-                    errors = result.get('errors', [])
-                elif isinstance(result, list):
-                    findings = result
-                elif result is not None:
-                    findings = [{'result': str(result)}]
+                try:
+                    result = module.run(
+                        target=self.target,
+                        config=self.config.get(module_name, {})
+                    )
+                except TypeError as e:
+                    # Handle modules that don't accept config parameter
+                    if "unexpected keyword argument" in str(e):
+                        result = module.run(target=self.target)
+                    else:
+                        raise
+                
+                # Validate and normalize the result
+                validated = self._validate_module_result(result)
+                findings = validated.get('findings', [])
+                errors = validated.get('errors', [])
+                
+                if not findings and not errors:
+                    self.logger.debug(f"Module {module_name} returned empty result")
             else:
                 raise ModuleError(f"Module {module_name} has no run() function")
 
@@ -305,7 +447,30 @@ class ScanEngine:
             'errors_encountered': len(self.errors),
             'total_requests': self.total_requests,
             'elapsed_time': time.time() - self.start_time if self.start_time > 0 else 0,
+            'progress': self.get_progress(),
         }
+
+    def get_progress(self) -> Dict[str, Any]:
+        """Get real-time scan progress."""
+        total = self._total_modules or 1
+        completed = self._completed_modules
+        
+        return {
+            'total_modules': total,
+            'completed_modules': completed,
+            'percentage': round((completed / total) * 100, 1),
+            'is_running': self.status == ScanStatus.RUNNING,
+            'is_paused': self.status == ScanStatus.PAUSED,
+            'is_completed': self.status == ScanStatus.COMPLETED,
+        }
+
+    def is_running(self) -> bool:
+        """Check if scan is currently running."""
+        return self.status == ScanStatus.RUNNING
+
+    def is_completed(self) -> bool:
+        """Check if scan is completed."""
+        return self.status == ScanStatus.COMPLETED
 
     def get_module_result(self, module_name: str) -> Optional[ModuleResult]:
         return self.module_results.get(module_name)
@@ -347,4 +512,7 @@ class ScanEngine:
         self.total_requests = 0
         self.start_time = 0.0
         self.end_time = 0.0
+        self._completed_modules = 0
+        self._total_modules = 0
+        self._module_cache.clear()
         self.logger.info("ScanEngine reset")
