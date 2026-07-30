@@ -20,7 +20,7 @@ from urllib.parse import urlparse, urljoin, urldefrag
 from collections import deque
 
 import requests
-from requests.exceptions import RequestException
+from requests.exceptions import RequestException, Timeout, ConnectionError
 from bs4 import BeautifulSoup
 
 
@@ -48,6 +48,20 @@ class WebSpider:
     and build a complete site map with configurable depth.
     """
     
+    BLOCKED_EXTENSIONS = [
+        '.pdf', '.zip', '.tar', '.gz', '.rar', '.7z',
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg',
+        '.mp4', '.mp3', '.avi', '.mov', '.wmv',
+        '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+        '.exe', '.dmg', '.iso', '.bin',
+    ]
+    
+    BLOCKED_PATTERNS = [
+        '/logout', '/signout', '/delete',
+        'javascript:', 'mailto:', 'tel:',
+        'data:', 'blob:',
+    ]
+    
     def __init__(
         self,
         target: str,
@@ -60,7 +74,7 @@ class WebSpider:
             target: Target URL to crawl
             config: Configuration dictionary
         """
-        self.target = target.rstrip('/')
+        self.target = target.rstrip('/') if target else ''
         self.config = config or {}
         self.session = requests.Session()
         self.session.headers.update({
@@ -73,8 +87,9 @@ class WebSpider:
         self.max_pages = self.config.get('max_pages', 500)
         self.delay = self.config.get('delay', 0.1)
         self.stay_in_scope = self.config.get('stay_in_scope', True)
+        self.respect_robots = self.config.get('respect_robots', True)
         
-        self.target_domain = urlparse(self.target).netloc
+        self.target_domain = urlparse(self.target).netloc if self.target else ''
         
         self.visited_urls: Set[str] = set()
         self.crawled_pages: List[CrawledPage] = []
@@ -82,11 +97,142 @@ class WebSpider:
         self.discovered_forms: List[Dict[str, Any]] = []
         self.discovered_scripts: Set[str] = set()
         self.errors: List[str] = []
+        self.scan_status: str = 'initialized'
+        self._robots_disallowed: Set[str] = set()
         
         self.url_queue: deque = deque()
-        self.url_queue.append((self.target, 0, None))
+        if self.target:
+            self.url_queue.append((self.target, 0, None))
     
-    def should_crawl(self, url: str) -> bool:
+    def _is_valid_url(self, url: Optional[str]) -> bool:
+        """
+        Check if URL is valid for crawling.
+        
+        Args:
+            url: URL to check
+            
+        Returns:
+            True if URL is valid
+        """
+        if not url:
+            return False
+        
+        if not isinstance(url, str):
+            return False
+        
+        url = url.strip()
+        if not url:
+            return False
+        
+        # Check for valid scheme
+        parsed = urlparse(url)
+        if not parsed.scheme:
+            return False
+        
+        if parsed.scheme not in ['http', 'https']:
+            return False
+        
+        return True
+    
+    def _normalize_url_safe(self, url: str) -> str:
+        """
+        Safely normalize a URL.
+        
+        Args:
+            url: URL to normalize
+            
+        Returns:
+            Normalized URL string
+        """
+        if not url:
+            return ''
+        
+        try:
+            url, _ = urldefrag(url)
+            url = url.rstrip('/')
+            return url
+        except Exception:
+            return url
+    
+    def _clean_url(self, url: str) -> str:
+        """
+        Clean URL by removing unwanted characters.
+        
+        Args:
+            url: URL to clean
+            
+        Returns:
+            Cleaned URL
+        """
+        if not url:
+            return ''
+        
+        # Remove leading/trailing whitespace
+        url = url.strip()
+        
+        # Remove newlines and tabs
+        url = url.replace('\n', '').replace('\r', '').replace('\t', '')
+        
+        return url
+    
+    def _validate_target(self) -> Tuple[bool, str]:
+        """
+        Validate target before crawling.
+        
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if not self.target:
+            return False, "Target is empty"
+        
+        if not self._is_valid_url(self.target):
+            return False, f"Invalid target URL: {self.target}"
+        
+        return True, ""
+    
+    def _is_blocked_extension(self, url: str) -> bool:
+        """
+        Check if URL has blocked extension.
+        
+        Args:
+            url: URL to check
+            
+        Returns:
+            True if blocked
+        """
+        if not url:
+            return False
+        
+        path = urlparse(url).path.lower()
+        
+        for ext in self.BLOCKED_EXTENSIONS:
+            if path.endswith(ext):
+                return True
+        
+        return False
+    
+    def _is_blocked_pattern(self, url: str) -> bool:
+        """
+        Check if URL matches blocked pattern.
+        
+        Args:
+            url: URL to check
+            
+        Returns:
+            True if blocked
+        """
+        if not url:
+            return False
+        
+        url_lower = url.lower()
+        
+        for pattern in self.BLOCKED_PATTERNS:
+            if pattern in url_lower:
+                return True
+        
+        return False
+    
+    def _should_crawl(self, url: str) -> bool:
         """
         Determine if a URL should be crawled.
         
@@ -96,13 +242,20 @@ class WebSpider:
         Returns:
             True if should crawl
         """
-        if url in self.visited_urls:
+        if not self._is_valid_url(url):
+            return False
+        
+        normalized_url = self._normalize_url_safe(url)
+        if not normalized_url:
+            return False
+        
+        if normalized_url in self.visited_urls:
             return False
         
         if len(self.visited_urls) >= self.max_pages:
             return False
         
-        parsed = urlparse(url)
+        parsed = urlparse(normalized_url)
         
         if not parsed.scheme.startswith('http'):
             return False
@@ -112,48 +265,115 @@ class WebSpider:
                 if not parsed.netloc.endswith('.' + self.target_domain):
                     return False
         
-        blocked_extensions = [
-            '.pdf', '.zip', '.tar', '.gz', '.rar', '.7z',
-            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg',
-            '.mp4', '.mp3', '.avi', '.mov', '.wmv',
-            '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-            '.exe', '.dmg', '.iso', '.bin',
-        ]
+        # Check robots.txt
+        if self.respect_robots and self._is_disallowed_by_robots(normalized_url):
+            return False
         
-        path_lower = parsed.path.lower()
-        for ext in blocked_extensions:
-            if path_lower.endswith(ext):
-                return False
+        # Check blocked extensions
+        if self._is_blocked_extension(normalized_url):
+            return False
         
-        blocked_patterns = [
-            '/logout', '/signout', '/delete',
-            'javascript:', 'mailto:', 'tel:',
-        ]
-        
-        url_lower = url.lower()
-        for pattern in blocked_patterns:
-            if pattern in url_lower:
-                return False
+        # Check blocked patterns
+        if self._is_blocked_pattern(normalized_url):
+            return False
         
         return True
     
-    def normalize_url(self, url: str) -> str:
+    def should_crawl(self, url: str) -> bool:
         """
-        Normalize a URL by removing fragments and trailing slashes.
+        Determine if a URL should be crawled (legacy method).
         
         Args:
-            url: URL to normalize
+            url: URL to check
             
         Returns:
-            Normalized URL string
+            True if should crawl
         """
-        url, _ = urldefrag(url)
-        url = url.rstrip('/')
-        return url
+        return self._should_crawl(url)
     
-    def extract_links(self, soup: BeautifulSoup, base_url: str) -> List[str]:
+    def _get_robots_txt(self) -> Optional[str]:
         """
-        Extract all links from HTML content.
+        Fetch robots.txt from target.
+        
+        Returns:
+            Robots.txt content or None
+        """
+        if not self.target:
+            return None
+        
+        try:
+            parsed = urlparse(self.target)
+            robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+            
+            response = self.session.get(
+                robots_url,
+                timeout=5,
+                verify=self.verify_ssl
+            )
+            
+            if response.status_code == 200:
+                return response.text
+            
+            return None
+            
+        except Exception:
+            return None
+    
+    def _parse_robots_txt(self, content: str) -> Set[str]:
+        """
+        Parse robots.txt for disallowed paths.
+        
+        Args:
+            content: Robots.txt content
+            
+        Returns:
+            Set of disallowed paths
+        """
+        disallowed = set()
+        
+        if not content:
+            return disallowed
+        
+        lines = content.strip().split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            if line.lower().startswith('disallow:'):
+                path = line.split(':', 1)[1].strip()
+                if path and path != '/':
+                    disallowed.add(path)
+        
+        return disallowed
+    
+    def _is_disallowed_by_robots(self, url: str) -> bool:
+        """
+        Check if URL is disallowed by robots.txt.
+        
+        Args:
+            url: URL to check
+            
+        Returns:
+            True if disallowed
+        """
+        if not self._robots_disallowed:
+            robots_content = self._get_robots_txt()
+            if robots_content:
+                self._robots_disallowed = self._parse_robots_txt(robots_content)
+        
+        if not self._robots_disallowed:
+            return False
+        
+        path = urlparse(url).path
+        
+        for disallowed_path in self._robots_disallowed:
+            if path.startswith(disallowed_path):
+                return True
+        
+        return False
+    
+    def _safe_extract_links(self, soup: BeautifulSoup, base_url: str) -> List[str]:
+        """
+        Safely extract links from HTML content.
         
         Args:
             soup: BeautifulSoup object
@@ -164,25 +384,34 @@ class WebSpider:
         """
         links = []
         
-        for tag in soup.find_all(['a', 'link']):
-            href = tag.get('href')
-            if href:
-                absolute_url = urljoin(base_url, href)
-                absolute_url = self.normalize_url(absolute_url)
-                links.append(absolute_url)
-        
-        for tag in soup.find_all(['img', 'script', 'iframe', 'source']):
-            src = tag.get('src')
-            if src:
-                absolute_url = urljoin(base_url, src)
-                absolute_url = self.normalize_url(absolute_url)
-                links.append(absolute_url)
+        try:
+            for tag in soup.find_all(['a', 'link']):
+                href = tag.get('href')
+                if href:
+                    href = self._clean_url(href)
+                    if self._is_valid_url(href) or href.startswith('/'):
+                        absolute_url = urljoin(base_url, href)
+                        absolute_url = self._normalize_url_safe(absolute_url)
+                        if absolute_url:
+                            links.append(absolute_url)
+            
+            for tag in soup.find_all(['img', 'script', 'iframe', 'source']):
+                src = tag.get('src')
+                if src:
+                    src = self._clean_url(src)
+                    if self._is_valid_url(src) or src.startswith('/'):
+                        absolute_url = urljoin(base_url, src)
+                        absolute_url = self._normalize_url_safe(absolute_url)
+                        if absolute_url:
+                            links.append(absolute_url)
+        except Exception as e:
+            self.errors.append(f"Link extraction failed: {str(e)}")
         
         return links
     
-    def extract_forms(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
+    def _safe_extract_forms(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, Any]]:
         """
-        Extract all forms from HTML content.
+        Safely extract forms from HTML content.
         
         Args:
             soup: BeautifulSoup object
@@ -193,31 +422,37 @@ class WebSpider:
         """
         forms = []
         
-        for form in soup.find_all('form'):
-            form_data = {
-                'action': urljoin(base_url, form.get('action', '')),
-                'method': form.get('method', 'get').upper(),
-                'inputs': [],
-                'page_url': base_url,
-            }
-            
-            for input_tag in form.find_all(['input', 'textarea', 'select']):
-                input_data = {
-                    'name': input_tag.get('name', ''),
-                    'type': input_tag.get('type', 'text'),
-                    'value': input_tag.get('value', ''),
-                    'placeholder': input_tag.get('placeholder', ''),
-                    'required': input_tag.get('required') is not None,
+        try:
+            for form in soup.find_all('form'):
+                action = form.get('action', '')
+                action = self._clean_url(action) if action else ''
+                
+                form_data = {
+                    'action': urljoin(base_url, action) if action else base_url,
+                    'method': form.get('method', 'get').upper(),
+                    'inputs': [],
+                    'page_url': base_url,
                 }
-                form_data['inputs'].append(input_data)
-            
-            forms.append(form_data)
+                
+                for input_tag in form.find_all(['input', 'textarea', 'select']):
+                    input_data = {
+                        'name': input_tag.get('name', '') or '',
+                        'type': input_tag.get('type', 'text'),
+                        'value': input_tag.get('value', ''),
+                        'placeholder': input_tag.get('placeholder', ''),
+                        'required': input_tag.get('required') is not None,
+                    }
+                    form_data['inputs'].append(input_data)
+                
+                forms.append(form_data)
+        except Exception as e:
+            self.errors.append(f"Form extraction failed: {str(e)}")
         
         return forms
     
-    def extract_scripts(self, soup: BeautifulSoup, base_url: str) -> List[str]:
+    def _safe_extract_scripts(self, soup: BeautifulSoup, base_url: str) -> List[str]:
         """
-        Extract all script sources from HTML content.
+        Safely extract scripts from HTML content.
         
         Args:
             soup: BeautifulSoup object
@@ -228,20 +463,26 @@ class WebSpider:
         """
         scripts = []
         
-        for script in soup.find_all('script'):
-            src = script.get('src')
-            if src:
-                absolute_url = urljoin(base_url, src)
-                scripts.append(absolute_url)
-            elif script.string:
-                content_hash = hashlib.md5(script.string.encode()).hexdigest()
-                scripts.append(f"inline:{content_hash}")
+        try:
+            for script in soup.find_all('script'):
+                src = script.get('src')
+                if src:
+                    src = self._clean_url(src)
+                    absolute_url = urljoin(base_url, src)
+                    absolute_url = self._normalize_url_safe(absolute_url)
+                    if absolute_url:
+                        scripts.append(absolute_url)
+                elif script.string:
+                    content_hash = hashlib.md5(script.string.encode()).hexdigest()
+                    scripts.append(f"inline:{content_hash}")
+        except Exception as e:
+            self.errors.append(f"Script extraction failed: {str(e)}")
         
         return scripts
     
-    def crawl_page(self, url: str, depth: int, parent_url: Optional[str]) -> CrawledPage:
+    def _safe_crawl_page(self, url: str, depth: int, parent_url: Optional[str]) -> Optional[CrawledPage]:
         """
-        Crawl a single page and extract information.
+        Safely crawl a single page.
         
         Args:
             url: URL to crawl
@@ -249,7 +490,7 @@ class WebSpider:
             parent_url: Parent URL that linked to this page
             
         Returns:
-            CrawledPage object
+            CrawledPage object or None
         """
         try:
             response = self.session.get(
@@ -261,6 +502,7 @@ class WebSpider:
             
             content_type = response.headers.get('Content-Type', '')
             
+            # Handle non-HTML content
             if 'text/html' not in content_type:
                 return CrawledPage(
                     url=url,
@@ -276,6 +518,7 @@ class WebSpider:
                     timestamp=time.time(),
                 )
             
+            # Parse HTML content
             soup = BeautifulSoup(response.text, 'html.parser')
             
             title = ''
@@ -283,20 +526,21 @@ class WebSpider:
             if title_tag:
                 title = title_tag.get_text(strip=True)
             
-            links = self.extract_links(soup, url)
-            forms = self.extract_forms(soup, url)
-            scripts = self.extract_scripts(soup, url)
+            links = self._safe_extract_links(soup, url)
+            forms = self._safe_extract_forms(soup, url)
+            scripts = self._safe_extract_scripts(soup, url)
             
             self.discovered_urls.update(links)
             self.discovered_forms.extend(forms)
             self.discovered_scripts.update(scripts)
             
+            # Add new URLs to queue
             if depth < self.max_depth:
                 for link in links:
-                    if self.should_crawl(link):
+                    if self._should_crawl(link):
                         self.url_queue.append((link, depth + 1, url))
             
-            page = CrawledPage(
+            return CrawledPage(
                 url=url,
                 status_code=response.status_code,
                 content_type=content_type,
@@ -310,12 +554,30 @@ class WebSpider:
                 timestamp=time.time(),
             )
             
-            self.crawled_pages.append(page)
-            return page
-            
+        except (Timeout, ConnectionError) as e:
+            self.errors.append(f"Timeout/Connection error for {url}: {str(e)}")
+            return None
         except RequestException as e:
             self.errors.append(f"Crawl failed for {url}: {str(e)}")
+            return None
+        except Exception as e:
+            self.errors.append(f"Unexpected error crawling {url}: {str(e)}")
+            return None
+    
+    def crawl_page(self, url: str, depth: int, parent_url: Optional[str]) -> CrawledPage:
+        """
+        Crawl a single page and extract information (legacy method).
+        
+        Args:
+            url: URL to crawl
+            depth: Current crawl depth
+            parent_url: Parent URL that linked to this page
             
+        Returns:
+            CrawledPage object
+        """
+        result = self._safe_crawl_page(url, depth, parent_url)
+        if result is None:
             return CrawledPage(
                 url=url,
                 status_code=0,
@@ -329,6 +591,7 @@ class WebSpider:
                 parent_url=parent_url,
                 timestamp=time.time(),
             )
+        return result
     
     def start_crawling(self) -> List[CrawledPage]:
         """
@@ -337,26 +600,41 @@ class WebSpider:
         Returns:
             List of CrawledPage objects
         """
+        self.scan_status = 'running'
+        
         while self.url_queue:
             if len(self.visited_urls) >= self.max_pages:
                 break
             
-            url, depth, parent = self.url_queue.popleft()
+            try:
+                url, depth, parent = self.url_queue.popleft()
+            except IndexError:
+                break
             
-            url = self.normalize_url(url)
+            if not url:
+                continue
+            
+            url = self._normalize_url_safe(url)
+            
+            if not url:
+                continue
             
             if url in self.visited_urls:
                 continue
             
-            if not self.should_crawl(url):
+            if not self._should_crawl(url):
                 continue
             
             self.visited_urls.add(url)
             
-            page = self.crawl_page(url, depth, parent)
+            page = self._safe_crawl_page(url, depth, parent)
+            
+            if page:
+                self.crawled_pages.append(page)
             
             time.sleep(self.delay)
         
+        self.scan_status = 'completed'
         return self.crawled_pages
     
     def get_site_map(self) -> Dict[str, Any]:
@@ -404,6 +682,9 @@ class WebSpider:
         ]
         
         for url in self.discovered_urls:
+            if not url:
+                continue
+            
             url_lower = url.lower()
             
             for pattern in api_patterns:
@@ -423,8 +704,39 @@ class WebSpider:
         Returns:
             Dictionary with crawl results
         """
+        # Reset state
+        self.visited_urls.clear()
+        self.crawled_pages.clear()
+        self.discovered_urls.clear()
+        self.discovered_forms.clear()
+        self.discovered_scripts.clear()
+        self.errors.clear()
+        self.scan_status = 'initialized'
+        
+        # Validate target
+        valid, error = self._validate_target()
+        if not valid:
+            self.errors.append(error)
+            self.scan_status = 'failed'
+            return {
+                'findings': [],
+                'errors': self.errors,
+                'site_map': {},
+                'endpoints': [],
+                'pages_crawled': 0,
+                'urls_discovered': 0,
+                'scan_status': 'failed',
+                'error': error,
+            }
+        
+        # Initialize queue
+        self.url_queue = deque()
+        self.url_queue.append((self.target, 0, None))
+        
+        # Start crawling
         self.start_crawling()
         
+        # Get results
         site_map = self.get_site_map()
         endpoints = self.get_endpoints()
         
@@ -434,26 +746,41 @@ class WebSpider:
             findings.append({
                 'type': 'API Endpoints Discovered',
                 'severity': 'info',
+                'target': self.target,
                 'description': f'Found {len(endpoints)} potential API endpoints',
                 'evidence': endpoints[:10],
                 'remediation': 'Review exposed API endpoints for security',
             })
         
-        sensitive_files = [url for url in self.discovered_urls if any(
-            keyword in url.lower() for keyword in [
+        sensitive_files = []
+        for url in self.discovered_urls:
+            if not url:
+                continue
+            url_lower = url.lower()
+            if any(keyword in url_lower for keyword in [
                 'backup', '.bak', '.old', '.swp', '~',
                 '.git', '.env', 'config', 'password',
                 'credential', 'secret', '.sql', '.dump',
-            ]
-        )]
+            ]):
+                sensitive_files.append(url)
         
         if sensitive_files:
             findings.append({
                 'type': 'Sensitive Files Discovered',
                 'severity': 'high',
+                'target': self.target,
                 'description': f'Found {len(sensitive_files)} potentially sensitive files',
                 'evidence': sensitive_files[:10],
                 'remediation': 'Remove or protect sensitive files from public access',
+            })
+        
+        if not self.crawled_pages:
+            findings.append({
+                'type': 'No Pages Crawled',
+                'severity': 'info',
+                'target': self.target,
+                'description': 'No pages were crawled. Check target availability.',
+                'remediation': 'Verify target is accessible and try again',
             })
         
         return {
@@ -463,4 +790,6 @@ class WebSpider:
             'endpoints': endpoints,
             'pages_crawled': len(self.crawled_pages),
             'urls_discovered': len(self.discovered_urls),
+            'scan_status': self.scan_status,
+            'sensitive_files_found': len(sensitive_files),
         }
